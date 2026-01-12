@@ -6,5 +6,5 @@
 ## SavedVariables: PriestPowerDB, PriestPower_Assignments
 ## SavedVariablesPerCharacter: PriestPower_Saved
 localization.lua
-PriestPower.xml
 PriestPower.lua
+PriestPower.xml

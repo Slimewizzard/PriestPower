@@ -1,6 +1,5 @@
 <Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\FrameXML\UI.xsd">
-    <Script file="localization.lua"/>
-    <Script file="PriestPower.lua"/>
+    <!-- Scripts loaded via TOC -->
 
     <!-- Single Buff Button (Half Width) -->
     <Button name="PriestPowerSubButtonTemplate" virtual="true">
@@ -23,7 +22,7 @@
                     </Anchors>
                 </Texture>
                  <!-- Added Status Text -->
-                 <FontString name="$parentText" inherits="GameFontHighlightSmall" text="5/5" justifyH="CENTER">
+                 <FontString name="$parentText" inherits="GameFontHighlightSmall" text="" justifyH="CENTER">
                      <Anchors>
                         <Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="2"/></Offset></Anchor>
                      </Anchors>
@@ -229,17 +228,103 @@
         </Scripts>
     </Frame>
     
+    <!-- HUD Button Template -->
+    <Button name="PriestPowerBuffButtonTemplate" virtual="true" hidden="true">
+        <Size>
+            <AbsDimension x="30" y="30"/>
+        </Size>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentIcon"/>
+            </Layer>
+            <Layer level="OVERLAY">
+                <FontString name="$parentText" inherits="GameFontHighlightSmall" text="5/5" justifyH="CENTER">
+                    <Anchors>
+                        <Anchor point="CENTER"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor>
+                    </Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnLoad>this:RegisterForClicks("LeftButtonUp", "RightButtonUp")</OnLoad>
+            <OnClick>
+                -- PriestPower_BuffButton_OnClick(this)
+            </OnClick>
+            <OnEnter>
+                GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+                GameTooltip:SetText(this.tooltipText)
+                GameTooltip:Show()
+            </OnEnter>
+            <OnLeave>GameTooltip:Hide()</OnLeave>
+        </Scripts>
+        <NormalTexture name="$parentNormalTexture" file="Interface\Buttons\UI-Quickslot2">
+			<Size>
+				<AbsDimension x="54" y="54"/>
+			</Size>
+			<Anchors>
+				<Anchor point="CENTER">
+					<Offset>
+						<AbsDimension x="0" y="-1"/>
+					</Offset>
+				</Anchor>
+			</Anchors>
+		</NormalTexture>
+    </Button>
+
     <Frame name="PriestPowerBuffBar" hidden="false" toplevel="true" frameStrata="LOW" enableMouse="true" movable="true" parent="UIParent">
          <Size>
-             <AbsDimension x="110" y="30"/>
+             <AbsDimension x="100" y="30"/>
         </Size>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <EdgeSize><AbsValue val="8"/></EdgeSize>
+            <TileSize><AbsValue val="8"/></TileSize>
+            <BackgroundInsets><AbsInset left="2" right="2" top="2" bottom="2"/></BackgroundInsets>
+            <Color r="0" g="0" b="0" a="0.5"/>
+        </Backdrop>
         <Scripts>
+             <OnLoad>
+                 this:RegisterForDrag("LeftButton")
+             </OnLoad>
+             <OnDragStart>this:StartMoving()</OnDragStart>
+             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
              <OnUpdate>
                 if (PriestPower_OnUpdate) then
                     PriestPower_OnUpdate(arg1);
                 end
              </OnUpdate>
         </Scripts>
+        <Frames>
+            <Frame name="$parentLabel">
+                 <Layers><Layer level="OVERLAY"><FontString inherits="GameFontNormalSmall" text="PriestPower"><Anchors><Anchor point="TOP"/></Anchors></FontString></Layer></Layers>
+            </Frame>
+            
+            <!-- Pool of Buttons (Dynamic Assignment) -->
+            <Button name="PriestPowerBuffButton1" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="5" y="-15"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton2" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton1" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton3" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton2" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton4" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton3" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton5" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton4" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton6" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton5" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton7" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton6" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton8" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton7" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton9" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton8" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            <Button name="PriestPowerBuffButton10" inherits="PriestPowerBuffButtonTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerBuffButton9" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors></Button>
+            
+            <!-- Champion Cluster HUD -->
+            <Frame name="PriestPowerBuffBarChamp" inherits="PriestPowerChampionTemplate" hidden="true">
+                <Anchors>
+                    <Anchor point="TOP" relativeTo="PriestPowerBuffButton10" relativePoint="BOTTOM">
+                         <Offset><AbsDimension x="0" y="-5"/></Offset>
+                    </Anchor>
+                </Anchors>
+                <Scripts>
+                    <OnLoad>
+                         -- Need to resize this one slightly? Defaults are 80x42
+                         this:SetScale(0.8)
+                    </OnLoad>
+                </Scripts>
+            </Frame>
+        </Frames>
     </Frame>
 
     <Frame name="PriestPowerChampDropDown" inherits="UIDropDownMenuTemplate" id="1" hidden="true">

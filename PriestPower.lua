@@ -57,39 +57,166 @@ function PriestPower_OnLoad()
     SLASH_PRIESTPOWER2 = "/priestpower"
     SLASH_PRIESTPOWER3 = "/prp"
 
-    SLASH_PRIESTPOWER3 = "/prp"
-
-    DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r loaded. Type /pp to open, /pp debug to toggle logs.")
-end
-
-function PriestPower_OnUpdate(tdiff)
-    PP_NextScan = PP_NextScan - tdiff
-    if PP_NextScan < 0 and IsPriest then
-        PriestPower_ScanRaid()
-        -- PriestPower_UpdateUI() -- Triggering UI update on scan might be heavy, usually optional
-        PP_NextScan = PP_PerUser.scanfreq
-    end
+    if PP_DebugEnabled then PP_Debug("PriestPower OnLoad") end
 end
 
 function PriestPower_OnEvent(event)
-    PP_Debug("Event Fired: " .. tostring(event))
-    if (event == "SPELLS_CHANGED" or event == "PLAYER_ENTERING_WORLD") then
-        PriestPower_ScanSpells()
-    end
-    
-    if (event == "PLAYER_LOGIN") then
+    if event == "PLAYER_LOGIN" then
+        UIDropDownMenu_Initialize(PriestPowerChampDropDown, PriestPower_ChampDropDown_Initialize, "MENU")
+        
         local _, class = UnitClass("player")
         if class == "PRIEST" then
             IsPriest = true
             PriestPower_ScanSpells()
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r loaded.")
         else
             IsPriest = false
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r loaded. Not a Priest (Disabled).")
+        end
+        
+    elseif event == "SPELLS_CHANGED" or event == "PLAYER_ENTERING_WORLD" then
+        if IsPriest then PriestPower_ScanSpells() end
+    elseif event == "PARTY_MEMBERS_CHANGED" or event == "RAID_ROSTER_UPDATE" then
+        PriestPower_ScanRaid()
+        PriestPower_UpdateUI()
+    elseif event == "CHAT_MSG_ADDON" then
+        PriestPower_ParseMessage(arg1, arg2, arg4)
+    end
+end
+
+function PriestPower_OnUpdate(elapsed)
+    -- Stub for now, can handle timers later
+    PP_NextScan = PP_NextScan - elapsed
+    if PP_NextScan <= 0 then
+        PP_NextScan = PP_PerUser.scanfreq
+        PriestPower_ScanRaid()
+        PriestPower_UpdateUI()
+    end
+end
+
+function PriestPower_UpdateBuffBar()
+    -- Hide all first
+    local i = 1
+    while true do
+        local btn = getglobal("PriestPowerBuffButton"..i)
+        if not btn then break end
+        btn:Hide()
+        i = i + 1
+    end
+    getglobal("PriestPowerBuffBarChamp"):Hide()
+    
+    local pname = UnitName("player")
+    local assigns = PriestPower_Assignments[pname]
+    
+    local btnIdx = 1
+    
+    if assigns then
+        for gid = 1, 8 do
+             if assigns[gid] and assigns[gid] > 0 then
+                 local val = assigns[gid]
+                 
+                 -- Bit 1: Fortitude
+                 if math.mod(val, 2) == 1 then
+                     local btn = getglobal("PriestPowerBuffButton"..btnIdx)
+                     if btn then
+                         btn:Show()
+                         getglobal(btn:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[0])
+                         btn.tooltipText = "Group "..gid..": Fortitude"
+                         
+                         local missing = 0
+                         local total = 0
+                         if CurrentBuffs[gid] then
+                            for _, member in CurrentBuffs[gid] do
+                                total = total + 1
+                                if not member.hasFort and not member.dead then missing = missing + 1 end
+                            end
+                         end
+                         
+                         local text = getglobal(btn:GetName().."Text")
+                         if missing > 0 then
+                             text:SetText(missing)
+                             text:SetTextColor(1,0,0)
+                         else
+                             text:SetText(total)
+                             text:SetTextColor(0,1,0)
+                         end
+                         
+                         btnIdx = btnIdx + 1
+                     end
+                 end
+                 
+                 -- Bit 2: Spirit
+                 if val >= 2 then
+                     local btn = getglobal("PriestPowerBuffButton"..btnIdx)
+                     if btn then
+                         btn:Show()
+                         getglobal(btn:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[1])
+                         btn.tooltipText = "Group "..gid..": Spirit"
+                         
+                         local missing = 0
+                         local total = 0
+                         if CurrentBuffs[gid] then
+                            for _, member in CurrentBuffs[gid] do
+                                total = total + 1
+                                if not member.hasSpirit and not member.dead then missing = missing + 1 end
+                            end
+                         end
+                         
+                         local text = getglobal(btn:GetName().."Text")
+                         if missing > 0 then
+                             text:SetText(missing)
+                             text:SetTextColor(1,0,0)
+                         else
+                             text:SetText(total)
+                             text:SetTextColor(0,1,0)
+                         end
+                         
+                         btnIdx = btnIdx + 1
+                     end
+                 end
+             end
         end
     end
-
-    if (event == "CHAT_MSG_ADDON" and arg1 == PP_PREFIX and (arg3 == "PARTY" or arg3 == "RAID")) then
-        PriestPower_ParseMessage(arg4, arg2)
+    
+    -- Champion
+    if PriestPower_LegacyAssignments[pname] and PriestPower_LegacyAssignments[pname]["Champ"] then
+        local champFrame = getglobal("PriestPowerBuffBarChamp")
+        champFrame:Show()
+        
+        -- Anchor it dynamically
+        if btnIdx > 1 then
+            champFrame:SetPoint("TOP", "PriestPowerBuffButton"..(btnIdx-1), "BOTTOM", 0, -5)
+        else
+            champFrame:SetPoint("TOPLEFT", "PriestPowerBuffBar", "TOPLEFT", 10, -15)
+        end
+        
+        -- Update Champ Button Status
+        local target = PriestPower_LegacyAssignments[pname]["Champ"]
+        local status = CurrentBuffsByName[target]
+        
+        getglobal("PriestPowerBuffBarChampName"):SetText(target)
+        
+        local btnP = getglobal("PriestPowerBuffBarChampProclaim")
+        local btnG = getglobal("PriestPowerBuffBarChampGrace")
+        local btnE = getglobal("PriestPowerBuffBarChampEmpower")
+        
+        getglobal(btnP:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Proclaim"])
+        getglobal(btnG:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Grace"])
+        getglobal(btnE:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Empower"])
+        
+        if status and status.hasProclaim then getglobal(btnP:GetName().."Text"):SetText("") 
+        else getglobal(btnP:GetName().."Text"):SetText("|cffff0000X|r") end
+        
+        -- Ideally show timers here too, but simple check for now
     end
+    
+    -- Resize Container
+    local height = 20 + ((btnIdx-1) * 32)
+    if PriestPower_LegacyAssignments[pname] and PriestPower_LegacyAssignments[pname]["Champ"] then
+        height = height + 50
+    end
+    if height < 30 then height = 30 end
+    PriestPowerBuffBar:SetHeight(height)
 end
 
 function PriestPower_ScanSpells()
@@ -458,6 +585,8 @@ function PriestPower_UpdateUI()
     end
     
     for k = i, 5 do getglobal("PriestPowerFramePlayer"..k):Hide() end
+    
+    PriestPower_UpdateBuffBar()
 end
 
 function PriestPowerSubButton_OnClick(btn)
@@ -511,13 +640,22 @@ end
 PriestPower_ContextName = nil
 
 function PriestPowerChampButton_OnClick(btn)
-    local grandParent = btn:GetParent():GetParent() -- PriestPowerFramePlayerX
-    local _, _, pid = string.find(grandParent:GetName(), "Player(%d+)")
-    pid = tonumber(pid)
+    local grandParent = btn:GetParent():GetParent() -- PriestPowerFramePlayerX OR PriestPowerBuffBar
+    local pname = nil
     
-    local pname = getglobal("PriestPowerFramePlayer"..pid.."Name"):GetText()
+    if grandParent:GetName() == "PriestPowerBuffBar" then
+        pname = UnitName("player")
+    else
+        local _, _, pid = string.find(grandParent:GetName(), "Player(%d+)")
+        if pid then
+            pid = tonumber(pid)
+            pname = getglobal("PriestPowerFramePlayer"..pid.."Name"):GetText()
+        end
+    end
+    
+    if not pname then return end
+
     PriestPower_ContextName = pname
-    
     ToggleDropDownMenu(1, nil, PriestPowerChampDropDown, btn:GetName(), 0, 0)
 end
 
