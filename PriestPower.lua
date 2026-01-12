@@ -44,6 +44,25 @@ function PP_Debug(msg)
     end
 end
 
+function PriestPower_SlashCommandHandler(msg)
+    if msg == "debug" then
+        PP_DebugEnabled = not PP_DebugEnabled
+        if PP_DebugEnabled then
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r Debug Enabled.")
+            PP_Debug("Debug Mode Active")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r Debug Disabled.")
+        end
+    else
+        if PriestPowerFrame:IsVisible() then
+            PriestPowerFrame:Hide()
+        else
+            PriestPowerFrame:Show()
+            PriestPower_UpdateUI()
+        end
+    end
+end
+
 -- Scanning/Logic
 function PriestPower_OnLoad()
     this:RegisterEvent("SPELLS_CHANGED")
@@ -60,10 +79,21 @@ function PriestPower_OnLoad()
     SLASH_PRIESTPOWER3 = "/prp"
 
     if PP_DebugEnabled then PP_Debug("PriestPower OnLoad") end
+    
+    -- message("PriestPower Loaded Successfully") 
 end
+
+
 
 function PriestPower_OnEvent(event)
     if event == "PLAYER_LOGIN" then
+        if not PP_PerUser then
+            PP_PerUser = {
+                scanfreq = 10,
+                scanperframe = 1,
+                smartbuffs = 1,
+            }
+        end
         UIDropDownMenu_Initialize(PriestPowerChampDropDown, PriestPower_ChampDropDown_Initialize, "MENU")
         
         local _, class = UnitClass("player")
@@ -87,6 +117,7 @@ function PriestPower_OnEvent(event)
 end
 
 function PriestPower_OnUpdate(elapsed)
+    if not PP_PerUser then return end
     -- Stub for now, can handle timers later
     PP_NextScan = PP_NextScan - elapsed
     if PP_NextScan <= 0 then
@@ -216,7 +247,7 @@ function PriestPower_UpdateBuffBar()
              
              local text = ""
              if PP_BuffTimers[target] then
-                 local rem = PP_BuffTimers[target] - GetTime()
+                 local rem = PP_BuffTimers[target] - time()
                  if rem > 3600 then
                      text = math.ceil(rem/3600).."h"
                  elseif rem > 60 then
@@ -233,7 +264,30 @@ function PriestPower_UpdateBuffBar()
              getglobal(btnP:GetName().."Text"):SetText("|cffff0000X|r") -- Red X if missing
         end
         
-        -- Ideally show timers here too, but simple check for now
+        -- Grace & Empower (Mutually Exclusive Display)
+        -- Reset Anchors
+        btnG:ClearAllPoints(); btnG:SetPoint("LEFT", btnP, "RIGHT", 0, 0)
+        btnE:ClearAllPoints(); btnE:SetPoint("LEFT", btnG, "RIGHT", 0, 0)
+        
+        if status then 
+            if status.hasGrace then
+                btnG:Show(); btnG:SetAlpha(1.0)
+                btnE:Hide()
+            elseif status.hasEmpower then
+                btnG:Hide()
+                btnE:Show(); btnE:SetAlpha(1.0)
+                -- Move Empower to Grace's spot
+                btnE:ClearAllPoints(); btnE:SetPoint("LEFT", btnP, "RIGHT", 0, 0)
+            else
+                -- Neither active: Show both faded
+                btnG:Show(); btnG:SetAlpha(0.4)
+                btnE:Show(); btnE:SetAlpha(0.4)
+            end
+        else
+             -- No status (target invalid/far/dead?), show faded?
+             btnG:Show(); btnG:SetAlpha(0.4)
+             btnE:Show(); btnE:SetAlpha(0.4)
+        end
     end
     
     -- Resize Container
@@ -349,9 +403,10 @@ function PriestPower_ScanRaid()
             end
             
             -- Timer Logic
+            if not PP_BuffTimers then PP_BuffTimers = {} end
             if buffInfo.hasProclaim then
                 if not PP_BuffTimers[name] then
-                    PP_BuffTimers[name] = GetTime() + 7200 -- 2 Hours
+                    PP_BuffTimers[name] = time() + 7200 -- 2 Hours
                 end
             else
                 PP_BuffTimers[name] = nil
@@ -363,41 +418,61 @@ function PriestPower_ScanRaid()
     end
 end
 
+function PriestPower_SendMessage(msg)
+    if GetNumRaidMembers() > 0 then
+        SendAddonMessage(PP_PREFIX, msg, "RAID")
+    elseif GetNumPartyMembers() > 0 then
+        SendAddonMessage(PP_PREFIX, msg, "PARTY")
+    end
+end
+
+function PriestPower_RequestSend()
+    PriestPower_SendMessage("REQ")
+end
+
 function PriestPower_SendSelf()
-    if not AllPriests[UnitName("player")] then return end
+    if not IsPriest then return end
+    -- Ensure scan
+    PriestPower_ScanSpells()
     
-    local RankInfo = AllPriests[UnitName("player")]
+    local pname = UnitName("player")
+    local myRanks = AllPriests[pname]
+    if not myRanks then return end
+    
     local msg = "SELF "
-    
-    for id = 0, 2 do
-        if RankInfo[id] then
-            msg = msg .. RankInfo[id].rank .. RankInfo[id].talent
-        else
-            msg = msg .. "nn"
+    -- Ranks: Fort(0) Spirit(1) Shadow(2) -> 2 chars each (rank+talent)
+    for i=0,2 do
+        if myRanks[i] then 
+            msg = msg .. myRanks[i].rank .. myRanks[i].talent 
+        else 
+            msg = msg .. "00" 
         end
     end
-    
-    local p = RankInfo["Proclaim"] and "1" or "0"
-    local g = RankInfo["Grace"] and "1" or "0"
-    local e = RankInfo["Empower"] and "1" or "0"
-    local r = RankInfo["Revive"] and "1" or "0"
-    msg = msg .. p .. g .. e .. r
+    -- Champion Flags (P G E R)
+    msg = msg .. (myRanks["Proclaim"] and "1" or "0")
+    msg = msg .. (myRanks["Grace"] and "1" or "0")
+    msg = msg .. (myRanks["Empower"] and "1" or "0")
+    msg = msg .. (myRanks["Revive"] and "1" or "0")
     
     msg = msg .. "@"
     
-    if PriestPower_Assignments[UnitName("player")] then
-        for id = 0, 9 do
-            local val = PriestPower_Assignments[UnitName("player")][id]
-            if val then msg = msg .. val else msg = msg .. "n" end
-        end
-    else
-        for id = 0, 9 do msg = msg .. "n" end
+    -- Assignments (Groups 1-8)
+    local assigns = PriestPower_Assignments[pname]
+    for i=1,8 do
+        local val = 0
+        if assigns and assigns[i] then val = assigns[i] end
+        msg = msg .. val
     end
     
-    if PriestPower_LegacyAssignments[UnitName("player")] and PriestPower_LegacyAssignments[UnitName("player")]["Champ"] then
-         msg = msg .. "$" .. PriestPower_LegacyAssignments[UnitName("player")]["Champ"]
+    msg = msg .. "@"
+    
+    -- Champ Assignment
+    local champ = "nil"
+    if PriestPower_LegacyAssignments[pname] and PriestPower_LegacyAssignments[pname]["Champ"] then
+        champ = PriestPower_LegacyAssignments[pname]["Champ"]
     end
-
+    msg = msg .. champ
+    
     PriestPower_SendMessage(msg)
 end
 
@@ -415,7 +490,7 @@ function PriestPower_ParseMessage(sender, msg)
     if msg == "REQ" then
         PriestPower_SendSelf()
     elseif string.find(msg, "^SELF") then
-        local _, _, ranks, assigns, champ = string.find(msg, "SELF ([0-9n]*)@([0-9n]*)$?(.*)")
+        local _, _, ranks, assigns, champ = string.find(msg, "SELF (.-)@(.-)@(.*)")
         
         if not ranks then return end
         
@@ -426,7 +501,7 @@ function PriestPower_ParseMessage(sender, msg)
             local r = string.sub(ranks, id*2+1, id*2+1)
             local t = string.sub(ranks, id*2+2, id*2+2)
             if r ~= "n" then
-                info[id] = { rank = tonumber(r), talent = tonumber(t) }
+                info[id] = { rank = tonumber(r) or 0, talent = tonumber(t) or 0 }
             end
         end
         
@@ -436,10 +511,10 @@ function PriestPower_ParseMessage(sender, msg)
         info["Revive"]   = (string.sub(ranks, 10, 10) == "1")
         
         PriestPower_Assignments[sender] = PriestPower_Assignments[sender] or {}
-        for id = 0, 9 do
-             local val = string.sub(assigns, id+1, id+1)
-             if val ~= "n" then
-                 PriestPower_Assignments[sender][id] = tonumber(val)
+        for gid = 1, 8 do
+             local val = string.sub(assigns, gid, gid)
+             if val ~= "n" and val ~= "" then
+                 PriestPower_Assignments[sender][gid] = tonumber(val)
              end
         end
         
@@ -472,8 +547,10 @@ function PriestPower_ParseMessage(sender, msg)
 end
 
 function PriestPower_UpdateUI()
+    if not PriestPower_Assignments then PriestPower_Assignments = {} end
+    if not PriestPower_LegacyAssignments then PriestPower_LegacyAssignments = {} end
     local i = 1
-    for name, info in AllPriests do
+    for name, info in pairs(AllPriests) do
         if i > 5 then break end 
         
         local frame = getglobal("PriestPowerFramePlayer"..i)
@@ -772,21 +849,3 @@ function PriestPower_ChampDropDown_Initialize()
     end
 end
 
-function PriestPower_SlashCommandHandler(msg)
-    if msg == "debug" then
-        PP_DebugEnabled = not PP_DebugEnabled
-        if PP_DebugEnabled then
-            DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r Debug Enabled.")
-            PP_Debug("Debug Mode Active")
-        else
-            DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r Debug Disabled.")
-        end
-    else
-        if PriestPowerFrame:IsVisible() then
-            PriestPowerFrame:Hide()
-        else
-            PriestPowerFrame:Show()
-            PriestPower_UpdateUI()
-        end
-    end
-end
