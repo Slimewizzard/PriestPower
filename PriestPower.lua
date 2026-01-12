@@ -35,6 +35,8 @@ AllPriests = {}
 CurrentBuffs = {}
 IsPriest = false
 PP_DebugEnabled = false
+PP_DebugFakeMembers = true
+PP_BuffTimers = {}
 
 function PP_Debug(msg)
     if PP_DebugEnabled then
@@ -95,14 +97,6 @@ function PriestPower_OnUpdate(elapsed)
 end
 
 function PriestPower_UpdateBuffBar()
-    -- Hide all first
-    local i = 1
-    while true do
-        local btn = getglobal("PriestPowerBuffButton"..i)
-        if not btn then break end
-        btn:Hide()
-        i = i + 1
-    end
     getglobal("PriestPowerBuffBarChamp"):Hide()
     
     local pname = UnitName("player")
@@ -110,73 +104,84 @@ function PriestPower_UpdateBuffBar()
     
     local btnIdx = 1
     
-    if assigns then
-        for gid = 1, 8 do
-             if assigns[gid] and assigns[gid] > 0 then
-                 local val = assigns[gid]
-                 
-                 -- Bit 1: Fortitude
-                 if math.mod(val, 2) == 1 then
-                     local btn = getglobal("PriestPowerBuffButton"..btnIdx)
-                     if btn then
-                         btn:Show()
-                         getglobal(btn:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[0])
-                         btn.tooltipText = "Group "..gid..": Fortitude"
-                         
-                         local missing = 0
-                         local total = 0
-                         if CurrentBuffs[gid] then
-                            for _, member in CurrentBuffs[gid] do
-                                total = total + 1
-                                if not member.hasFort and not member.dead then missing = missing + 1 end
-                            end
-                         end
-                         
-                         local text = getglobal(btn:GetName().."Text")
-                         if missing > 0 then
-                             text:SetText(missing)
-                             text:SetTextColor(1,0,0)
-                         else
-                             text:SetText(total)
-                             text:SetTextColor(0,1,0)
-                         end
-                         
-                         btnIdx = btnIdx + 1
-                     end
-                 end
-                 
-                 -- Bit 2: Spirit
-                 if val >= 2 then
-                     local btn = getglobal("PriestPowerBuffButton"..btnIdx)
-                     if btn then
-                         btn:Show()
-                         getglobal(btn:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[1])
-                         btn.tooltipText = "Group "..gid..": Spirit"
-                         
-                         local missing = 0
-                         local total = 0
-                         if CurrentBuffs[gid] then
-                            for _, member in CurrentBuffs[gid] do
-                                total = total + 1
-                                if not member.hasSpirit and not member.dead then missing = missing + 1 end
-                            end
-                         end
-                         
-                         local text = getglobal(btn:GetName().."Text")
-                         if missing > 0 then
-                             text:SetText(missing)
-                             text:SetTextColor(1,0,0)
-                         else
-                             text:SetText(total)
-                             text:SetTextColor(0,1,0)
-                         end
-                         
-                         btnIdx = btnIdx + 1
-                     end
+     -- Hide all rows first? Iterate and set based on assign
+     local lastVisibleRow = nil
+     
+     if assigns then
+         for gid = 1, 8 do
+             local row = getglobal("PriestPowerHUDRow"..gid)
+             if row then
+                 if assigns[gid] and assigns[gid] > 0 then
+                      row:Show()
+                      lastVisibleRow = row
+                      getglobal(row:GetName().."Label"):SetText("Grp "..gid)
+                      
+                      local val = assigns[gid]
+                      
+                      -- Fortitude (Bit 1)
+                      local btnFort = getglobal(row:GetName().."Fort")
+                      if math.mod(val, 2) == 1 then
+                          btnFort:Show()
+                          getglobal(btnFort:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[0])
+                          btnFort.tooltipText = "Group "..gid..": Fortitude"
+                          
+                          local missing = 0
+                          local total = 0
+                          if CurrentBuffs[gid] then
+                              for _, member in CurrentBuffs[gid] do
+                                  total = total + 1
+                                  if not member.hasFort and not member.dead then missing = missing + 1 end
+                              end
+                          end
+                          
+                          local text = getglobal(btnFort:GetName().."Text")
+                          if missing > 0 then
+                              text:SetText(missing)
+                              text:SetTextColor(1,0,0)
+                          else
+                              text:SetText(total)
+                              text:SetTextColor(0,1,0)
+                          end
+                      else
+                          btnFort:Hide()
+                      end
+                      
+                      -- Spirit (Bit 2, val >= 2)
+                      local btnSpirit = getglobal(row:GetName().."Spirit")
+                      if val >= 2 then
+                          btnSpirit:Show()
+                          getglobal(btnSpirit:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[1])
+                          btnSpirit.tooltipText = "Group "..gid..": Spirit"
+                          
+                          local missing = 0
+                          local total = 0
+                          if CurrentBuffs[gid] then
+                              for _, member in CurrentBuffs[gid] do
+                                  total = total + 1
+                                  if not member.hasSpirit and not member.dead then missing = missing + 1 end
+                              end
+                          end
+                          
+                          local text = getglobal(btnSpirit:GetName().."Text")
+                          if missing > 0 then
+                              text:SetText(missing)
+                              text:SetTextColor(1,0,0)
+                          else
+                              text:SetText(total)
+                              text:SetTextColor(0,1,0)
+                          end
+                      else
+                          btnSpirit:Hide()
+                      end
+                 else
+                      row:Hide()
                  end
              end
-        end
-    end
+         end
+     else
+          -- No assigns, hide all
+          for gid=1,8 do getglobal("PriestPowerHUDRow"..gid):Hide() end
+     end
     
     -- Champion
     if PriestPower_LegacyAssignments[pname] and PriestPower_LegacyAssignments[pname]["Champ"] then
@@ -184,8 +189,9 @@ function PriestPower_UpdateBuffBar()
         champFrame:Show()
         
         -- Anchor it dynamically
-        if btnIdx > 1 then
-            champFrame:SetPoint("TOP", "PriestPowerBuffButton"..(btnIdx-1), "BOTTOM", 0, -5)
+        champFrame:ClearAllPoints()
+        if lastVisibleRow then
+            champFrame:SetPoint("TOP", lastVisibleRow, "BOTTOM", 0, -10)
         else
             champFrame:SetPoint("TOPLEFT", "PriestPowerBuffBar", "TOPLEFT", 10, -15)
         end
@@ -204,9 +210,28 @@ function PriestPower_UpdateBuffBar()
         getglobal(btnP:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Proclaim"])
         getglobal(btnG:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Grace"])
         getglobal(btnE:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Empower"])
-        
-        if status and status.hasProclaim then getglobal(btnP:GetName().."Text"):SetText("") 
-        else getglobal(btnP:GetName().."Text"):SetText("|cffff0000X|r") end
+        -- Proclaim
+        if status and status.hasProclaim then
+             btnP:SetAlpha(1.0)
+             
+             local text = ""
+             if PP_BuffTimers[target] then
+                 local rem = PP_BuffTimers[target] - GetTime()
+                 if rem > 3600 then
+                     text = math.ceil(rem/3600).."h"
+                 elseif rem > 60 then
+                     text = math.ceil(rem/60).."m"
+                 elseif rem > 0 then
+                     text = math.ceil(rem).."s"
+                 else
+                     text = "0s"
+                 end
+             end
+             getglobal(btnP:GetName().."Text"):SetText(text)
+        else
+             btnP:SetAlpha(1.0)
+             getglobal(btnP:GetName().."Text"):SetText("|cffff0000X|r") -- Red X if missing
+        end
         
         -- Ideally show timers here too, but simple check for now
     end
@@ -316,11 +341,20 @@ function PriestPower_ScanRaid()
                 if string.find(bname, "Fortitude") then buffInfo.hasFort = true end
                 if string.find(bname, "Spirit") or string.find(bname, "Inspiration") then buffInfo.hasSpirit = true end
                 
-                if string.find(bname, "Proclaim Champion") or string.find(bname, "Holy Champion") then buffInfo.hasProclaim = true end
-                if string.find(bname, "Champion's Grace") then buffInfo.hasGrace = true end
-                if string.find(bname, "Empower Champion") then buffInfo.hasEmpower = true end
+                if string.find(bname, "ProclaimChampion") or string.find(bname, "HolyChampion") then buffInfo.hasProclaim = true end
+                if string.find(bname, "ChampionsGrace") then buffInfo.hasGrace = true end
+                if string.find(bname, "EmpowerChampion") then buffInfo.hasEmpower = true end
                 
                 b = b + 1
+            end
+            
+            -- Timer Logic
+            if buffInfo.hasProclaim then
+                if not PP_BuffTimers[name] then
+                    PP_BuffTimers[name] = GetTime() + 7200 -- 2 Hours
+                end
+            else
+                PP_BuffTimers[name] = nil
             end
             
             table.insert(CurrentBuffs[subgroup], buffInfo)
