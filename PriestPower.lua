@@ -40,6 +40,51 @@ IsPriest = false
 PP_DebugEnabled = false
 PP_DebugFakeMembers = true
 PP_BuffTimers = {}
+PP_WasInGroup = false
+
+function PriestPower_IsPromoted(name)
+    if not name then name = UnitName("player") end
+    
+    if GetNumRaidMembers() > 0 then
+        for i=1, GetNumRaidMembers() do
+            local n, rank = GetRaidRosterInfo(i)
+            if n == name then
+                -- Rank: 0=Member, 1=Assistant, 2=Leader
+                return (rank > 0)
+            end
+        end
+    elseif GetNumPartyMembers() > 0 then
+        if name == UnitName("player") then
+            return IsPartyLeader()
+        else
+            -- Impossible to check remote party leader easily without sync?
+            -- Actually IsPartyLeader() only works for player. 
+            -- But usually only player permission matters for UI.
+            -- For remote parsing, maybe assume trust or check if sender says "I am leader"? 
+            -- For now strict: Only trust self if leader in party.
+            -- Wait, GetPartyLeaderIndex()? 
+            if GetPartyLeaderIndex() == 0 then -- Player is leader
+                 return (name == UnitName("player"))
+            else
+                 -- Someone else is leader.
+                 -- If name matches party leader?
+                 -- GetPartyLeaderIndex returns index 1-4 or 0.
+                 local index = GetPartyLeaderIndex()
+                 if index > 0 then
+                    return (name == UnitName("party"..index))
+                 end
+            end
+        end
+    end
+    return false
+end
+
+function PriestPower_IsLeader()
+    if IsPartyLeader() then return true end
+    if IsRaidLeader() then return true end
+    if GetPartyLeaderIndex() == 0 then return true end
+    return false
+end
 
 function PP_Debug(msg)
     if PP_DebugEnabled then
@@ -54,6 +99,30 @@ PP_SpellDuration = {
     ["Empower"] = 600,   -- 10 Minutes
 }
 
+function PriestPower_ClearAssignments(targetName)
+    if not targetName then return end
+    
+    PriestPower_Assignments[targetName] = {}
+    PriestPower_LegacyAssignments[targetName] = {}
+    
+    PriestPower_SendMessage("CLEAR "..targetName)
+    DEFAULT_CHAT_FRAME:AddMessage("Cleared Assignments for "..targetName)
+    PriestPower_UpdateUI()
+end
+
+function PriestPower_ClearButton_OnClick()
+   local parent = this:GetParent()
+   local pname = getglobal(parent:GetName().."Name"):GetText()
+   
+   if not pname then return end
+   
+   if PriestPower_IsPromoted() then
+       PriestPower_ClearAssignments(pname)
+   else
+       DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r: Permission Denied.")
+   end
+end
+
 function PriestPower_SlashCommandHandler(msg)
     if msg == "debug" then
         PP_DebugEnabled = not PP_DebugEnabled
@@ -63,6 +132,22 @@ function PriestPower_SlashCommandHandler(msg)
         else
             DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r Debug Disabled.")
         end
+    elseif msg == "reset" then
+        -- Reset BuffBar position and scale
+        if PP_PerUser then
+            PP_PerUser.Point = nil
+            PP_PerUser.RelativePoint = nil
+            PP_PerUser.X = nil
+            PP_PerUser.Y = nil
+            PP_PerUser.Scale = 0.7
+        end
+        local bar = getglobal("PriestPowerBuffBar")
+        if bar then
+            bar:ClearAllPoints()
+            bar:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+            bar:SetScale(0.7)
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r BuffBar reset to default position and scale.")
     else
         if PriestPowerFrame:IsVisible() then
             PriestPowerFrame:Hide()
@@ -133,6 +218,16 @@ function PriestPower_OnEvent(event)
                 PP_LastRequest = GetTime()
             end
         end
+        
+        -- Auto-reset removed in favor of manual clear
+        PP_WasInGroup = (GetNumRaidMembers() > 0) or (GetNumPartyMembers() > 0)
+
+        -- Init saved vars
+        if not PP_PerUser then PP_PerUser = { Scale = 0.7 } end
+        
+        -- Create BuffWindow (Lua-based)
+        PriestPower_CreateBuffBar()
+        
     elseif event == "CHAT_MSG_SPELL_SELF_BUFF" then
         PriestPower_ParseSpellMessage(arg1)
     elseif event == "CHAT_MSG_ADDON" then
@@ -176,7 +271,11 @@ function PriestPower_OnUpdate(elapsed)
 end
 
 function PriestPower_UpdateBuffBar()
-    getglobal("PriestPowerBuffBarChamp"):Hide()
+    -- Guard: BuffBar might not exist yet
+    if not getglobal("PriestPowerBuffBar") then return end
+    
+    local champFrame = getglobal("PriestPowerBuffBarChamp")
+    if champFrame then champFrame:Hide() end
     
     local pname = UnitName("player")
     local assigns = PriestPower_Assignments[pname]
@@ -187,76 +286,88 @@ function PriestPower_UpdateBuffBar()
      local lastVisibleRow = nil
      
      if assigns then
-         for gid = 1, 8 do
-             local row = getglobal("PriestPowerHUDRow"..gid)
-             if row then
-                 if assigns[gid] and assigns[gid] > 0 then
-                      row:Show()
-                      lastVisibleRow = row
-                      getglobal(row:GetName().."Label"):SetText("Grp "..gid)
-                      
-                      local val = assigns[gid]
-                      
-                      -- Fortitude (Bit 1)
-                      local btnFort = getglobal(row:GetName().."Fort")
-                      if math.mod(val, 2) == 1 then
-                          btnFort:Show()
-                          getglobal(btnFort:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[0])
-                          btnFort.tooltipText = "Group "..gid..": Fortitude"
-                          
-                          local missing = 0
-                          local total = 0
-                          if CurrentBuffs[gid] then
-                              for _, member in CurrentBuffs[gid] do
-                                  total = total + 1
-                                  if not member.hasFort and not member.dead then missing = missing + 1 end
-                              end
-                          end
-                          
-                          local text = getglobal(btnFort:GetName().."Text")
-                          if missing > 0 then
-                              text:SetText(missing)
-                              text:SetTextColor(1,0,0)
-                          else
-                              text:SetText(total)
-                              text:SetTextColor(0,1,0)
-                          end
-                      else
-                          btnFort:Hide()
-                      end
-                      
-                      -- Spirit (Bit 2, val >= 2)
-                      local btnSpirit = getglobal(row:GetName().."Spirit")
-                      if val >= 2 then
-                          btnSpirit:Show()
-                          getglobal(btnSpirit:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[1])
-                          btnSpirit.tooltipText = "Group "..gid..": Spirit"
-                          
-                          local missing = 0
-                          local total = 0
-                          if CurrentBuffs[gid] then
-                              for _, member in CurrentBuffs[gid] do
-                                  total = total + 1
-                                  if not member.hasSpirit and not member.dead then missing = missing + 1 end
-                              end
-                          end
-                          
-                          local text = getglobal(btnSpirit:GetName().."Text")
-                          if missing > 0 then
-                              text:SetText(missing)
-                              text:SetTextColor(1,0,0)
-                          else
-                              text:SetText(total)
-                              text:SetTextColor(0,1,0)
-                          end
-                      else
-                          btnSpirit:Hide()
-                      end
-                 else
-                      row:Hide()
-                 end
-             end
-         end
+        for gid = 1, 8 do
+            local row = getglobal("PriestPowerHUDRow"..gid)
+            if row then
+                if assigns[gid] and assigns[gid] > 0 then
+                    row:Show()
+                    
+                    -- Dynamic re-anchoring to pack rows
+                    row:ClearAllPoints()
+                    if lastVisibleRow then
+                        row:SetPoint("TOP", lastVisibleRow, "BOTTOM", 0, 0)
+                    else
+                        -- First visible row
+                        row:SetPoint("TOPLEFT", "PriestPowerBuffBar", "TOPLEFT", 10, -10)
+                    end
+                    
+                    lastVisibleRow = row
+                    btnIdx = btnIdx + 1
+                    
+                    getglobal(row:GetName().."Label"):SetText("Grp "..gid)
+                    
+                    local val = assigns[gid]
+                    
+                    -- Fortitude (Bit 1)
+                    local btnFort = getglobal(row:GetName().."Fort")
+                    if math.mod(val, 2) == 1 then
+                        btnFort:Show()
+                        getglobal(btnFort:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[0])
+                        btnFort.tooltipText = "Group "..gid..": Fortitude"
+                        
+                        local missing = 0
+                        local total = 0
+                        if CurrentBuffs[gid] then
+                            for _, member in CurrentBuffs[gid] do
+                                total = total + 1
+                                if not member.hasFort and not member.dead then missing = missing + 1 end
+                            end
+                        end
+                        
+                        local text = getglobal(btnFort:GetName().."Text")
+                        if missing > 0 then
+                            text:SetText(missing)
+                            text:SetTextColor(1,0,0)
+                        else
+                            text:SetText(total)
+                            text:SetTextColor(0,1,0)
+                        end
+                    else
+                        btnFort:Hide()
+                    end
+                    
+                    -- Spirit (Bit 2, val >= 2)
+                    local btnSpirit = getglobal(row:GetName().."Spirit")
+                    if val >= 2 then
+                        btnSpirit:Show()
+                        getglobal(btnSpirit:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[1])
+                        btnSpirit.tooltipText = "Group "..gid..": Spirit"
+                        
+                        local missing = 0
+                        local total = 0
+                        if CurrentBuffs[gid] then
+                            for _, member in CurrentBuffs[gid] do
+                                total = total + 1
+                                if not member.hasSpirit and not member.dead then missing = missing + 1 end
+                            end
+                        end
+                        
+                        local text = getglobal(btnSpirit:GetName().."Text")
+                        if missing > 0 then
+                            text:SetText(missing)
+                            text:SetTextColor(1,0,0)
+                        else
+                            text:SetText(total)
+                            text:SetTextColor(0,1,0)
+                        end
+                    else
+                        btnSpirit:Hide()
+                    end
+                else
+                    row:Hide()
+                end
+            end
+        end
      else
           -- No assigns, hide all
           for gid=1,8 do getglobal("PriestPowerHUDRow"..gid):Hide() end
@@ -635,19 +746,40 @@ function PriestPower_ParseMessage(sender, msg)
         
     elseif string.find(msg, "^ASSIGN ") then
         local _, _, name, class, skill = string.find(msg, "^ASSIGN (.-) (.-) (.*)")
+        -- Sec Check: name=Target, sender=Sender
+        -- If Sender != Target and Sender != Promoted -> Ignore
         if name and class and skill then
-            PriestPower_Assignments[name] = PriestPower_Assignments[name] or {}
-            PriestPower_Assignments[name][tonumber(class)] = tonumber(skill)
-             PriestPower_UpdateUI()
+            if sender == name or PriestPower_IsPromoted(sender) then
+                PriestPower_Assignments[name] = PriestPower_Assignments[name] or {}
+                PriestPower_Assignments[name][tonumber(class)] = tonumber(skill)
+                PriestPower_UpdateUI()
+            else
+                -- Ignore unauthorized assignment
+            end
         end
         
     elseif string.find(msg, "^ASSIGNCHAMP ") then
         local _, _, name, target = string.find(msg, "^ASSIGNCHAMP (.-) (.*)")
         if name and target then
-            if target == "nil" or target == "" then target = nil end
-            PriestPower_LegacyAssignments[name] = PriestPower_LegacyAssignments[name] or {}
-            PriestPower_LegacyAssignments[name]["Champ"] = target
-             PriestPower_UpdateUI()
+            if sender == name or PriestPower_IsPromoted(sender) then
+                if target == "nil" or target == "" then target = nil end
+                PriestPower_LegacyAssignments[name] = PriestPower_LegacyAssignments[name] or {}
+                PriestPower_LegacyAssignments[name]["Champ"] = target
+                PriestPower_UpdateUI()
+            end
+        end
+        
+    elseif string.find(msg, "^CLEAR ") then
+        local _, _, target = string.find(msg, "^CLEAR (.*)")
+        if target then
+            if sender == target or PriestPower_IsPromoted(sender) then
+                PriestPower_Assignments[target] = {}
+                PriestPower_LegacyAssignments[target] = {}
+                if target == UnitName("player") then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r: Your assignments were cleared by "..sender)
+                end
+                PriestPower_UpdateUI()
+            end
         end
     end
 end
@@ -695,6 +827,14 @@ function PriestPower_UpdateUI()
             frame:Show()
             getglobal(frame:GetName().."Name"):SetText(name)
             
+            -- Clear Button
+            local btnClear = getglobal(frame:GetName().."Clear")
+            if PriestPower_IsPromoted() then
+                btnClear:Show()
+            else
+                btnClear:Hide()
+            end
+
             -- Capability Icons (Learned Spells)
             local capFrame = getglobal(frame:GetName().."Cap")
             
@@ -954,6 +1094,12 @@ function PriestPowerSubButton_OnClick(btn)
     
     local pname = getglobal("PriestPowerFramePlayer"..pid.."Name"):GetText()
     
+    -- Permission Check
+    if pname ~= UnitName("player") and not PriestPower_IsPromoted() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r: You must be promoted to assign others.")
+        return
+    end
+    
     -- Current Value
     local cur = 0
     if PriestPower_Assignments[pname] and PriestPower_Assignments[pname][gid] then
@@ -1007,6 +1153,13 @@ function PriestPowerChampButton_OnClick(btn)
     if not pname then return end
 
     PriestPower_ContextName = pname
+    
+    -- Permission Check
+    if pname ~= UnitName("player") and not PriestPower_IsPromoted() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r: You must be promoted to assign others.")
+        return
+    end
+    
     ToggleDropDownMenu(1, nil, PriestPowerChampDropDown, btn:GetName(), 0, 0)
 end
 
@@ -1088,3 +1241,149 @@ function PriestPower_ChampDropDown_Initialize()
     end
 end
 
+
+-----------------------------------------------------------------------------------
+-- Frame Position & Scaling
+-----------------------------------------------------------------------------------
+
+function PriestPower_SaveFramePosition(frame)
+    if not frame then return end
+    if not PP_PerUser then PP_PerUser = {} end
+
+    local point, relativeTo, relativePoint, xOfs, yOfs = frame:GetPoint()
+    PP_PerUser.Point = point
+    PP_PerUser.RelativePoint = relativePoint
+    PP_PerUser.X = xOfs
+    PP_PerUser.Y = yOfs
+    PP_PerUser.Scale = frame:GetScale()
+end
+
+function PriestPower_RestoreFramePosition(frame)
+    if not frame or not PP_PerUser then return end
+    
+    if PP_PerUser.Point and PP_PerUser.Point ~= "CENTER" then
+        frame:ClearAllPoints()
+        frame:SetPoint(PP_PerUser.Point, "UIParent", PP_PerUser.RelativePoint, PP_PerUser.X, PP_PerUser.Y)
+    end
+    if PP_PerUser.Scale then
+        frame:SetScale(PP_PerUser.Scale)
+    end
+end
+
+function PriestPower_ResizeGrip_OnMouseDown()
+    local parent = this:GetParent()
+    if not parent then return end
+    
+    -- Re-anchor to TOPLEFT relative to UIParent's BOTTOMLEFT to fix the origin
+    -- This prevents the window from "jumping" or moving its top-left corner during scaling
+    local left = parent:GetLeft()
+    local top = parent:GetTop()
+    
+    if left and top then
+        local s = parent:GetEffectiveScale()
+        local uis = UIParent:GetEffectiveScale()
+        parent:ClearAllPoints()
+        -- SetPoint offsets are relative to parent. 
+        -- GetLeft/Top are screen coords.
+        -- We need to divide by UIParent scale to get local coords for SetPoint.
+        parent:SetPoint("TOPLEFT", "UIParent", "BOTTOMLEFT", left / uis, top / uis)
+    end
+    
+    parent.isResizing = true
+    parent.startScale = parent:GetScale()
+    parent.cursorStartX, parent.cursorStartY = GetCursorPosition()
+    this:SetScript("OnUpdate", PriestPower_ResizeGrip_OnUpdate)
+end
+
+function PriestPower_ResizeGrip_OnMouseUp()
+    local parent = this:GetParent()
+    if not parent then return end
+    
+    parent.isResizing = false
+    this:SetScript("OnUpdate", nil)
+    PriestPower_SaveFramePosition(parent)
+end
+
+function PriestPower_ResizeGrip_OnUpdate()
+    local parent = this:GetParent()
+    if not parent.isResizing then return end
+    
+    local cursorX, cursorY = GetCursorPosition()
+    local scale = parent:GetEffectiveScale()
+    
+    -- Calculate new scale based on Y-axis (or diagonal) movement logic
+    -- We use Y for vertical drag or generic scaling.
+    -- X dragging right = bigger, Left = smaller
+    local diff = (cursorX - parent.cursorStartX) / (UIParent:GetScale())
+    
+    local newScale = parent.startScale + (diff * 0.005)
+    
+    if newScale < 0.5 then newScale = 0.5 end
+    if newScale > 2.0 then newScale = 2.0 end
+    
+    parent:SetScale(newScale)
+end
+
+function PriestPower_CreateBuffBar()
+    if getglobal("PriestPowerBuffBar") then return end
+    
+    local f = CreateFrame("Frame", "PriestPowerBuffBar", UIParent)
+    f:SetFrameStrata("LOW")
+    f:SetToplevel(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:SetClampedToScreen(true) -- Prevents flying off screen
+    f:SetWidth(120)
+    f:SetHeight(30)
+    f:SetPoint("CENTER", 0, 0)
+    
+    f:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 8, edgeSize = 8,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    f:SetBackdropColor(0,0,0,0.5)
+    
+    -- Scripts
+    f:SetScript("OnMouseDown", function()
+        if arg1 == "LeftButton" then
+            this:StartMoving()
+        end
+    end)
+    f:SetScript("OnMouseUp", function()
+        this:StopMovingOrSizing()
+        PriestPower_SaveFramePosition(this)
+    end)
+    f:SetScript("OnHide", function() this:StopMovingOrSizing() end)
+    
+    -- Resize Grip
+    local grip = CreateFrame("Button", "$parentResizeGrip", f, "PriestPowerResizeGripTemplate")
+    grip:SetPoint("BOTTOMRIGHT", -2, 2)
+    
+    -- Title Label
+    local lblFrame = CreateFrame("Frame", "$parentLabel", f)
+    lblFrame:SetAllPoints(f)
+    local fs = lblFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fs:SetText("PriestPower")
+    fs:SetPoint("TOP", 0, -2)
+    
+    -- Rows (1-8)
+    for i=1, 8 do
+        local row = CreateFrame("Frame", "PriestPowerHUDRow"..i, f, "PriestPowerHUDRowTemplate")
+        row:SetPoint("TOPLEFT", 5, -15) -- Initial pos, updated dynamically
+        row:Hide()
+    end
+    
+    -- Champion Frame
+    local champ = CreateFrame("Frame", "PriestPowerBuffBarChamp", f, "PriestPowerChampionTemplate")
+    champ:SetScale(1.4)
+    champ:Hide()
+    
+    -- Initial Scale/Pos
+    f:SetScale(0.7)
+    if PP_PerUser and PP_PerUser.Scale then
+        f:SetScale(PP_PerUser.Scale)
+    end
+    PriestPower_RestoreFramePosition(f)
+end

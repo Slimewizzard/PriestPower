@@ -160,6 +160,24 @@
         </Scripts>
     </Button>
     
+    <Button name="PriestPowerClearButtonTemplate" virtual="true">
+        <Size><AbsDimension x="14" y="14"/></Size>
+        <NormalTexture file="Interface\Buttons\UI-GroupLoot-Pass-Up"/>
+        <PushedTexture file="Interface\Buttons\UI-GroupLoot-Pass-Down"/>
+        <HighlightTexture file="Interface\Buttons\UI-GroupLoot-Pass-Highlight" alphaMode="ADD"/>
+        <Scripts>
+            <OnClick>
+                PriestPower_ClearButton_OnClick();
+            </OnClick>
+            <OnEnter>
+                GameTooltip:SetOwner(this, "ANCHOR_RIGHT");
+                GameTooltip:SetText("Clear Assignments");
+                GameTooltip:AddLine("Requires Leader/Assist", 1,0,0);
+            </OnEnter>
+            <OnLeave>GameTooltip:Hide();</OnLeave>
+        </Scripts>
+    </Button>
+    
     <Frame name="PriestPowerUserTemplate" hidden="false" virtual="true">
         <Size>
             <AbsDimension x="900" y="56"/>
@@ -172,10 +190,11 @@
                     </Size>
                     <Anchors>
                         <Anchor point="TOPLEFT">
-                            <Offset><AbsDimension x="10" y="-15"/></Offset>
+                            <Offset><AbsDimension x="25" y="-15"/></Offset>
                         </Anchor>
                     </Anchors>
                 </FontString>
+                
                 <FontString name="$parentChampName" inherits="GameFontHighlightSmall" text="Champion" justifyH="RIGHT">
                      <Size>
                         <AbsDimension x="80" y="16"/>
@@ -190,6 +209,15 @@
         </Layers>
         
         <Frames>
+            <!-- Clear Button -->
+            <Button name="$parentClear" inherits="PriestPowerClearButtonTemplate">
+                <Anchors>
+                    <Anchor point="TOPLEFT">
+                        <Offset><AbsDimension x="5" y="-14"/></Offset>
+                    </Anchor>
+                </Anchors>
+            </Button>
+
             <!-- Capability Icons (Learned Spells) -->
             <Frame name="$parentCap" hidden="false">
                 <Size><AbsDimension x="140" y="42"/></Size>
@@ -280,6 +308,19 @@
         </Scripts>
     </Frame>
     
+    <Button name="PriestPowerResizeGripTemplate" virtual="true">
+        <Size><AbsDimension x="16" y="16"/></Size>
+        <Scripts>
+            <OnMouseDown>
+                PriestPower_ResizeGrip_OnMouseDown()
+            </OnMouseDown>
+            <OnMouseUp>
+                PriestPower_ResizeGrip_OnMouseUp()
+            </OnMouseUp>
+        </Scripts>
+        <NormalTexture file="Interface\AddOns\PriestPower\PriestPower-ResizeGrip.tga"/>
+    </Button>
+
     <!-- HUD Button Template -->
     <Button name="PriestPowerBuffButtonTemplate" virtual="true" hidden="true">
         <Size>
@@ -293,11 +334,6 @@
                 <FontString name="$parentText" inherits="GameFontHighlightSmall" text="5/5" justifyH="CENTER">
                     <Anchors>
                         <Anchor point="CENTER"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor>
-                    </Anchors>
-                </FontString>
-                <FontString name="$parentLabel" inherits="GameFontNormalSmall" text="Grp 1" justifyH="RIGHT">
-                    <Anchors>
-                        <Anchor point="RIGHT" relativePoint="LEFT"><Offset><AbsDimension x="-5" y="0"/></Offset></Anchor>
                     </Anchors>
                 </FontString>
             </Layer>
@@ -347,62 +383,6 @@
         </Frames>
     </Frame>
 
-    <Frame name="PriestPowerBuffBar" hidden="false" toplevel="true" frameStrata="LOW" enableMouse="true" movable="true" parent="UIParent">
-         <Size>
-             <AbsDimension x="120" y="30"/>
-        </Size>
-        <Anchors>
-             <Anchor point="CENTER"/>
-        </Anchors>
-        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
-            <EdgeSize><AbsValue val="8"/></EdgeSize>
-            <TileSize><AbsValue val="8"/></TileSize>
-            <BackgroundInsets><AbsInset left="2" right="2" top="2" bottom="2"/></BackgroundInsets>
-            <Color r="0" g="0" b="0" a="0.5"/>
-        </Backdrop>
-        <Scripts>
-             <OnLoad>
-                 this:RegisterForDrag("LeftButton")
-                 this:SetScale(0.7)
-             </OnLoad>
-             <OnDragStart>this:StartMoving()</OnDragStart>
-             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
-             <OnUpdate>
-                if (PriestPower_OnUpdate) then
-                    PriestPower_OnUpdate(arg1);
-                end
-             </OnUpdate>
-        </Scripts>
-        <Frames>
-            <Frame name="$parentLabel">
-                 <Layers><Layer level="OVERLAY"><FontString inherits="GameFontNormalSmall" text="PriestPower"><Anchors><Anchor point="TOP"/></Anchors></FontString></Layer></Layers>
-            </Frame>
-            
-            <!-- Pool of Rows (Groups 1-8) -->
-            <Frame name="PriestPowerHUDRow1" inherits="PriestPowerHUDRowTemplate"><Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="5" y="-15"/></Offset></Anchor></Anchors></Frame>
-            <Frame name="PriestPowerHUDRow2" inherits="PriestPowerHUDRowTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerHUDRow1" relativePoint="BOTTOM"/></Anchors></Frame>
-            <Frame name="PriestPowerHUDRow3" inherits="PriestPowerHUDRowTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerHUDRow2" relativePoint="BOTTOM"/></Anchors></Frame>
-            <Frame name="PriestPowerHUDRow4" inherits="PriestPowerHUDRowTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerHUDRow3" relativePoint="BOTTOM"/></Anchors></Frame>
-            <Frame name="PriestPowerHUDRow5" inherits="PriestPowerHUDRowTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerHUDRow4" relativePoint="BOTTOM"/></Anchors></Frame>
-            <Frame name="PriestPowerHUDRow6" inherits="PriestPowerHUDRowTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerHUDRow5" relativePoint="BOTTOM"/></Anchors></Frame>
-            <Frame name="PriestPowerHUDRow7" inherits="PriestPowerHUDRowTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerHUDRow6" relativePoint="BOTTOM"/></Anchors></Frame>
-            <Frame name="PriestPowerHUDRow8" inherits="PriestPowerHUDRowTemplate"><Anchors><Anchor point="TOP" relativeTo="PriestPowerHUDRow7" relativePoint="BOTTOM"/></Anchors></Frame>
-            <!-- Champion Cluster HUD -->
-            <Frame name="PriestPowerBuffBarChamp" inherits="PriestPowerChampionTemplate" hidden="true">
-                <Anchors>
-                    <Anchor point="TOP" relativeTo="PriestPowerHUDRow8" relativePoint="BOTTOM">
-                         <Offset><AbsDimension x="0" y="-15"/></Offset>
-                    </Anchor>
-                </Anchors>
-                <Scripts>
-                    <OnLoad>
-                         -- "Twice as big"
-                         this:SetScale(1.4)
-                    </OnLoad>
-                </Scripts>
-            </Frame>
-        </Frames>
-    </Frame>
 
     <Frame name="PriestPowerChampDropDown" inherits="UIDropDownMenuTemplate" id="1" hidden="true">
         <Size>
