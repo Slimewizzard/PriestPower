@@ -6,4 +6,3 @@
 ## SavedVariablesPerCharacter: PriestPower_Assignments, PriestPower_LegacyAssignments, PP_BuffTimers, PP_PerUser
 localization.lua
 PriestPower.lua
-PriestPower.xml
