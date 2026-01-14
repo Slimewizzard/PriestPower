@@ -18,6 +18,11 @@ PriestPower is a priest-focused addon for World of Warcraft 1.12.1 (specifically
 - **Raid Coordination**: Syncs seamlessly with other PriestPower users to ensure everyone knows their assignments.
 - **Pure Lua UI**: Rewritten for high performance and stability, removing the dependency on legacy XML templates.
 
+Icons will disapper once you have done your buff. 
+You can rightclick to spotbuff, left click to refresh the whole group. 
+<img width="609" height="339" alt="bilde" src="https://github.com/user-attachments/assets/2c379d69-6ad3-4529-8a62-a8eba9d3ea97" />
+
+
 ## Commands
 
 - `/prip`: Toggle the main Configuration window.
