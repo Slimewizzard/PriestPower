@@ -696,7 +696,7 @@ function PriestPower_ScanRaid()
                 
                 if string.find(bname, "fortitude") then buffInfo.hasFort = true end
                 if string.find(bname, "spirit") or string.find(bname, "inspiration") then buffInfo.hasSpirit = true end
-                if string.find(bname, "shadow") and string.find(bname, "protection") then buffInfo.hasShadow = true end
+                if string.find(bname, "shadow") and (string.find(bname, "protection") or string.find(bname, "antishadow")) then buffInfo.hasShadow = true end
                 
                 if string.find(bname, "proclaimchampion") or string.find(bname, "holychampion") then buffInfo.hasProclaim = true end
                 if string.find(bname, "championsgrace") then buffInfo.hasGrace = true end
@@ -1805,7 +1805,7 @@ function PriestPower_UpdateBuffBar()
                          
                          if missing > 0 then
                              btn:Show()
-                             btn.tooltipText = "Group "..i..": "..label
+                             btn.tooltipText = "Group "..i..": "..label.."\nLeft-click: Group Buff\nRight-click: Spot-buff ("..missing.." missing)"
                              local txt = getglobal(btn:GetName().."Text")
                              local icon = getglobal(btn:GetName().."Icon")
                              local buffed = total - missing
@@ -1930,22 +1930,35 @@ function PriestPower_BuffButton_OnClick(btn)
         end
     else
         -- Group Buff Logic
+        -- Left-click = Group Buff (Prayer of X)
+        -- Right-click = Single Buff (spot-buff one person)
         local gid = i
         local spellName = nil
         local buffKey = nil
+        local isRightClick = (arg1 == "RightButton")
         
-        -- Use the assignmentState we stored in UpdateBuffBar
-        local state = btn.assignmentState or 0
-        
+        -- Determine which buff type was clicked
         if suffix == "Fort" then 
-            if state == 1 then spellName = SPELL_P_FORTITUDE else spellName = SPELL_FORTITUDE end
             buffKey = "hasFort"
+            if isRightClick then
+                spellName = SPELL_FORTITUDE -- Single target
+            else
+                spellName = SPELL_P_FORTITUDE -- Group buff
+            end
         elseif suffix == "Spirit" then 
-            if state == 1 then spellName = SPELL_P_SPIRIT else spellName = SPELL_SPIRIT end
             buffKey = "hasSpirit"
+            if isRightClick then
+                spellName = SPELL_SPIRIT -- Single target
+            else
+                spellName = SPELL_P_SPIRIT -- Group buff
+            end
         elseif suffix == "Shadow" then
-            if state == 1 then spellName = SPELL_P_SHADOW_PROT else spellName = SPELL_SHADOW_PROT end
             buffKey = "hasShadow"
+            if isRightClick then
+                spellName = SPELL_SHADOW_PROT -- Single target
+            else
+                spellName = SPELL_P_SHADOW_PROT -- Group buff
+            end
         end
         
         if spellName and CurrentBuffs[gid] then
@@ -1961,11 +1974,8 @@ function PriestPower_BuffButton_OnClick(btn)
                      -- Verify Target
                      if UnitExists("target") and UnitName("target") == member.name then
                          -- Check Range (28 yards approx)
-                         -- CheckInteractDistance("target", 4)
                          if CheckInteractDistance("target", 4) then
                              CastSpellByName(spellName)
-                             -- TargetLastTarget() -- Restore target immediately?
-                             -- Or wait for cast? Macro style "Cast; TargetLastTarget" usually works.
                              TargetLastTarget()
                              -- Force Scan to update "1/5" text immediately (local client state)
                              PriestPower_ScanRaid()
