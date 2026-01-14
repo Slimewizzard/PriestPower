@@ -680,7 +680,7 @@ function PriestPower_UpdateUI()
     if not PriestPower_LegacyAssignments then PriestPower_LegacyAssignments = {} end
     local i = 1
     for name, info in pairs(AllPriests) do
-        if i > 10 then break end 
+        if i > 40 then break end 
         
         local frame = getglobal("PriestPowerFramePlayer"..i)
         if frame then
@@ -959,7 +959,10 @@ function PriestPower_UpdateUI()
         i = i + 1
     end
     
-    for k = i, 10 do getglobal("PriestPowerFramePlayer"..k):Hide() end
+    for k = i, 40 do 
+        local fptr = getglobal("PriestPowerFramePlayer"..k)
+        if fptr then fptr:Hide() end
+    end
     
     PriestPower_UpdateBuffBar()
 end
@@ -1042,20 +1045,24 @@ function PriestPowerConfig_Create()
         caps:SetWidth(140); caps:SetHeight(42)
         caps:SetPoint("TOPLEFT", 110, -12)
         
-        local function CreateCapIcon(suffix, relTo)
+        local function CreateCapIcon(suffix, relTo, onClick)
             local btn = CreateFrame("Button", "$parent"..suffix, caps, "PriestPowerCapabilityIconTemplate")
             if relTo then btn:SetPoint("LEFT", relTo, "RIGHT", 0, 0)
             else btn:SetPoint("LEFT", 0, 0) end
+            if onClick then
+                btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+                btn:SetScript("OnClick", function() onClick(this) end)
+            end
             return btn
         end
-        local cF = CreateCapIcon("Fort", nil)
-        local cS = CreateCapIcon("Spirit", cF)
-        local cSh = CreateCapIcon("Shadow", cS)
-        local cP = CreateCapIcon("Proclaim", cSh)
-        local cG = CreateCapIcon("Grace", cP)
-        local cE = CreateCapIcon("Empower", cG)
-        local cR = CreateCapIcon("Revive", cE)
-        local cEn = CreateCapIcon("Enlighten", cR)
+        local cF = CreateCapIcon("Fort", nil, nil)
+        local cS = CreateCapIcon("Spirit", cF, nil)
+        local cSh = CreateCapIcon("Shadow", cS, nil)
+        local cP = CreateCapIcon("Proclaim", cSh, PriestPowerChampButton_OnClick)
+        local cG = CreateCapIcon("Grace", cP, PriestPowerChampButton_OnClick)
+        local cE = CreateCapIcon("Empower", cG, PriestPowerChampButton_OnClick)
+        local cR = CreateCapIcon("Revive", cE, nil)
+        local cEn = CreateCapIcon("Enlighten", cR, PriestPowerEnlightenButton_OnClick)
         
         -- Group Buttons (1-8)
         local lastGrp = nil
@@ -1274,7 +1281,6 @@ function PriestPower_ChampDropDown_Initialize()
                 UIDropDownMenu_AddButton(info)
             end
         end
-    else
     else
         -- If in party (Debug/5-man) or Solo
         local numParty = GetNumPartyMembers()
@@ -1578,15 +1584,16 @@ function PriestPower_UpdateBuffBar()
                      local btnE = getglobal(row:GetName().."Empower")
                      
                      -- PROCLAIM (0/1 or 1/1)
-                     btnP:Show()
-                     btnP.tooltipText = "Champion: "..target.." (Proclaim)"
-                     local txtP = getglobal(btnP:GetName().."Text")
-                     if status and status.hasProclaim then
-                         txtP:SetText("1/1")
-                         txtP:SetTextColor(0,1,0)
+                     local hasProclaim = (status and status.hasProclaim)
+                     if hasProclaim then
+                         btnP:Hide()
                      else
+                         btnP:Show()
+                         btnP.tooltipText = "Champion: "..target.." (Proclaim)"
+                         local txtP = getglobal(btnP:GetName().."Text")
                          txtP:SetText("0/1")
                          txtP:SetTextColor(1,0,0)
+                         showRow = true
                      end
                      
                      -- GRACE / EMPOWER (Timers)
@@ -1611,22 +1618,25 @@ function PriestPower_UpdateBuffBar()
                             getglobal(btnG:GetName().."Text"):SetText(GetTimerText("Grace"))
                             btnE:Hide()
                             btnE:SetAlpha(0.4)
+                            showRow = true
                         elseif status.hasEmpower then
                             btnE:Show(); btnE:SetAlpha(1.0)
                             btnE:ClearAllPoints(); btnE:SetPoint("LEFT", btnP, "RIGHT", 2, 0)
                             getglobal(btnE:GetName().."Text"):SetText(GetTimerText("Empower"))
                             btnG:Hide()
                             btnG:SetAlpha(0.4)
+                            showRow = true
                         else
                              -- Neither
                              btnG:Show(); btnG:SetAlpha(0.4); getglobal(btnG:GetName().."Text"):SetText("")
                              btnE:Show(); btnE:SetAlpha(0.4); getglobal(btnE:GetName().."Text"):SetText("")
+                             showRow = true
                         end
                      else
                          btnG:Show(); btnG:SetAlpha(0.4); getglobal(btnG:GetName().."Text"):SetText("")
                          btnE:Show(); btnE:SetAlpha(0.4); getglobal(btnE:GetName().."Text"):SetText("")
+                         showRow = true
                      end
-                     showRow = true
                  else
                      -- No champ assigned
                  end
@@ -1637,16 +1647,16 @@ function PriestPower_UpdateBuffBar()
                      local status = CurrentBuffsByName[target]
                      local btnEn = getglobal(row:GetName().."Enlighten")
                      
-                     btnEn:Show()
-                     btnEn.tooltipText = "Enlighten: "..target
-                     local txt = getglobal(btnEn:GetName().."Text")
-                     
-                     if status and status.hasEnlighten then
-                         txt:SetText("1/1")
-                         txt:SetTextColor(0,1,0)
+                     local hasEnlighten = (status and status.hasEnlighten)
+                     if hasEnlighten then
+                         btnEn:Hide()
                      else
+                         btnEn:Show()
+                         btnEn.tooltipText = "Enlighten: "..target
+                         local txt = getglobal(btnEn:GetName().."Text")
                          txt:SetText("0/1")
                          txt:SetTextColor(1,0,0)
+                         showRow = true
                      end
                      showRow = true
                  end
@@ -1655,10 +1665,6 @@ function PriestPower_UpdateBuffBar()
                 -- Check Fort (Bit 1)
                 local btnFort = getglobal(row:GetName().."Fort")
                 if math.mod(val, 2) == 1 then
-                    btnFort:Show()
-                    btnFort.tooltipText = "Group "..i..": Fortitude"
-                    -- Update Status (Missing/Total)
-                    -- (Reusing logic from old function)
                     local missing = 0; local total = 0
                     if CurrentBuffs[i] then
                         for _, m in CurrentBuffs[i] do
@@ -1666,17 +1672,19 @@ function PriestPower_UpdateBuffBar()
                              if not m.hasFort and not m.dead then missing = missing + 1 end
                         end
                     end
-                    local txt = getglobal(btnFort:GetName().."Text")
-                    if total > 0 then
+                    
+                    if missing > 0 then
+                        btnFort:Show()
+                        btnFort.tooltipText = "Group "..i..": Fortitude"
+                        local txt = getglobal(btnFort:GetName().."Text")
                         local buffed = total - missing
                         txt:SetText(buffed.."/"..total)
-                        if missing > 0 then txt:SetTextColor(1,0,0) -- Red
-                        else txt:SetTextColor(0,1,0) end -- Green
+                        txt:SetTextColor(1,0,0)
+                        getglobal(btnFort:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[0])
+                        showRow = true
                     else
-                        txt:SetText("")
-                    end                    
-                    getglobal(btnFort:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[0])
-                    showRow = true
+                        btnFort:Hide()
+                    end
                 else
                     btnFort:Hide()
                 end
@@ -1684,8 +1692,6 @@ function PriestPower_UpdateBuffBar()
                 -- Check Spirit (Bit 2)
                 local btnSpirit = getglobal(row:GetName().."Spirit")
                 if val >= 2 then
-                    btnSpirit:Show()
-                    btnSpirit.tooltipText = "Group "..i..": Spirit"
                      local missing = 0; local total = 0
                     if CurrentBuffs[i] then
                         for _, m in CurrentBuffs[i] do
@@ -1693,16 +1699,19 @@ function PriestPower_UpdateBuffBar()
                              if not m.hasSpirit and not m.dead then missing = missing + 1 end
                         end
                     end
-                    local txt = getglobal(btnSpirit:GetName().."Text")
-                    if total > 0 then
+                    
+                    if missing > 0 then
+                        btnSpirit:Show()
+                        btnSpirit.tooltipText = "Group "..i..": Spirit"
+                        local txt = getglobal(btnSpirit:GetName().."Text")
                         local buffed = total - missing
                         txt:SetText(buffed.."/"..total)
-                        if missing > 0 then txt:SetTextColor(1,0,0) -- Red
-                        else txt:SetTextColor(0,1,0) end -- Green
+                        txt:SetTextColor(1,0,0)
+                        getglobal(btnSpirit:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[1])
+                        showRow = true
                     else
-                        txt:SetText("")
-                    end                    getglobal(btnSpirit:GetName().."Icon"):SetTexture(PriestPower_BuffIcon[1])
-                    showRow = true
+                        btnSpirit:Hide()
+                    end
                 else
                     btnSpirit:Hide()
                 end
