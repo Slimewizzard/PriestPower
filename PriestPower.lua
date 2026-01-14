@@ -1443,12 +1443,27 @@ function PP_CreatePlayerSelectFrame()
     
     -- Clear Assignment Button
     local clearBtn = CreateFrame("Button", "PPPlayerSelectClear", f, "UIPanelButtonTemplate")
-    clearBtn:SetWidth(100)
+    clearBtn:SetWidth(70)
     clearBtn:SetHeight(20)
     clearBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -28)
     clearBtn:SetText("Clear")
     clearBtn:SetScript("OnClick", function()
         PP_SelectPlayer("CLEAR")
+    end)
+    
+    -- Pick Target Button
+    local targetBtn = CreateFrame("Button", "PPPlayerSelectTarget", f, "UIPanelButtonTemplate")
+    targetBtn:SetWidth(70)
+    targetBtn:SetHeight(20)
+    targetBtn:SetPoint("LEFT", clearBtn, "RIGHT", 5, 0)
+    targetBtn:SetText("Target")
+    targetBtn:SetScript("OnClick", function()
+        local targetName = UnitName("target")
+        if targetName and UnitIsPlayer("target") and UnitIsFriend("player", "target") then
+            PP_SelectPlayer(targetName)
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r: Please target a friendly player.")
+        end
     end)
     
     -- Scroll Frame Container
