@@ -1613,28 +1613,18 @@ function PriestPower_UpdateBuffBar()
                      btnE:ClearAllPoints(); btnE:SetPoint("LEFT", btnG, "RIGHT", 2, 0)
                      
                      if status then
-                        if status.hasGrace then
-                            btnG:Show(); btnG:SetAlpha(1.0)
-                            getglobal(btnG:GetName().."Text"):SetText(GetTimerText("Grace"))
-                            btnE:Hide()
-                            btnE:SetAlpha(0.4)
-                            showRow = true
-                        elseif status.hasEmpower then
-                            btnE:Show(); btnE:SetAlpha(1.0)
-                            btnE:ClearAllPoints(); btnE:SetPoint("LEFT", btnP, "RIGHT", 2, 0)
-                            getglobal(btnE:GetName().."Text"):SetText(GetTimerText("Empower"))
+                        if status.hasGrace or status.hasEmpower then
                             btnG:Hide()
-                            btnG:SetAlpha(0.4)
-                            showRow = true
+                            btnE:Hide()
                         else
-                             -- Neither
-                             btnG:Show(); btnG:SetAlpha(0.4); getglobal(btnG:GetName().."Text"):SetText("")
-                             btnE:Show(); btnE:SetAlpha(0.4); getglobal(btnE:GetName().."Text"):SetText("")
-                             showRow = true
+                            btnG:Show(); btnG:SetAlpha(1.0); getglobal(btnG:GetName().."Text"):SetText("")
+                            btnE:Show(); btnE:SetAlpha(1.0); getglobal(btnE:GetName().."Text"):SetText("")
+                            showRow = true
                         end
                      else
-                         btnG:Show(); btnG:SetAlpha(0.4); getglobal(btnG:GetName().."Text"):SetText("")
-                         btnE:Show(); btnE:SetAlpha(0.4); getglobal(btnE:GetName().."Text"):SetText("")
+                         -- No status (not in raid? or not scanned) -> Show both as available/missing
+                         btnG:Show(); btnG:SetAlpha(1.0); getglobal(btnG:GetName().."Text"):SetText("")
+                         btnE:Show(); btnE:SetAlpha(1.0); getglobal(btnE:GetName().."Text"):SetText("")
                          showRow = true
                      end
                  else
@@ -1769,9 +1759,9 @@ function PriestPower_BuffButton_OnClick(btn)
         -- Grace -> "Champion's Grace"
         -- Empower -> "Champion's Empower"
         local spell = nil
-        if suffix == "Proclaim" then spell = "Proclaim Champion"
-        elseif suffix == "Grace" then spell = "Champion's Grace"
-        elseif suffix == "Empower" then spell = "Champion's Empower"
+        if suffix == "Proclaim" then spell = SPELL_PROCLAIM
+        elseif suffix == "Grace" then spell = SPELL_GRACE
+        elseif suffix == "Empower" then spell = SPELL_EMPOWER
         end
         
         if spell then
