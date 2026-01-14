@@ -135,6 +135,43 @@
         </Frames>
     </Frame>
     
+    <!-- Enlighten Container (Holds Enlighten Button) -->
+    <Frame name="PriestPowerEnlightenTemplate" virtual="true">
+        <Size>
+            <AbsDimension x="40" y="42"/>
+        </Size>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <EdgeSize><AbsValue val="8"/></EdgeSize>
+            <TileSize><AbsValue val="8"/></TileSize>
+            <BackgroundInsets><AbsInset left="1" right="1" top="1" bottom="1"/></BackgroundInsets>
+        </Backdrop>
+        <Layers>
+            <Layer level="OVERLAY">
+                <FontString name="$parentName" inherits="GameFontNormalSmall" text="Enli" justifyH="CENTER">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="8"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentEnlighten" inherits="PriestPowerSubButtonTemplate">
+                <Anchors>
+                    <Anchor point="CENTER"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor>
+                </Anchors>
+                 <Scripts>
+                    <OnLoad>this:RegisterForClicks("LeftButtonUp", "RightButtonUp")</OnLoad>
+                    <OnClick>PriestPowerEnlightenButton_OnClick(this)</OnClick>
+                    <OnEnter>
+                        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+                        GameTooltip:SetText("Enlighten")
+                        GameTooltip:AddLine("Click to Assign Target")
+                        GameTooltip:Show()
+                    </OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </Button>
+        </Frames>
+    </Frame>
+    
     <Button name="PriestPowerCapabilityIconTemplate" virtual="true">
         <Size><AbsDimension x="18" y="18"/></Size>
         <Layers>
@@ -180,7 +217,7 @@
     
     <Frame name="PriestPowerUserTemplate" hidden="false" virtual="true">
         <Size>
-            <AbsDimension x="900" y="56"/>
+            <AbsDimension x="1000" y="56"/>
         </Size>
         <Layers>
             <Layer level="OVERLAY">
@@ -200,8 +237,19 @@
                         <AbsDimension x="80" y="16"/>
                     </Size>
                     <Anchors>
-                         <Anchor point="TOPLEFT">
+                        <Anchor point="TOPLEFT">
                             <Offset><AbsDimension x="740" y="-15"/></Offset>
+                        </Anchor>
+                    </Anchors>
+                </FontString>
+                
+                <FontString name="$parentEnlightenName" inherits="GameFontHighlightSmall" text="Enlighten" justifyH="RIGHT">
+                     <Size>
+                        <AbsDimension x="80" y="16"/>
+                    </Size>
+                    <Anchors>
+                        <Anchor point="TOPLEFT">
+                            <Offset><AbsDimension x="840" y="-15"/></Offset>
                         </Anchor>
                     </Anchors>
                 </FontString>
@@ -251,12 +299,21 @@
                     </Anchor>
                 </Anchors>
             </Frame>
+            
+             <!-- Enlighten Assignment (1 Button Container) -->
+            <Frame name="$parentEnlighten" inherits="PriestPowerEnlightenTemplate">
+                <Anchors>
+                    <Anchor point="TOPLEFT" relativeTo="$parentChamp" relativePoint="TOPRIGHT">
+                        <Offset><AbsDimension x="5" y="0"/></Offset>
+                    </Anchor>
+                </Anchors>
+            </Frame>
         </Frames>
     </Frame>
 
     <Frame name="PriestPowerFrame" hidden="true" toplevel="true" frameStrata="MEDIUM" enableMouse="true" movable="true" parent="UIParent">
         <Size>
-            <AbsDimension x="800" y="400"/>
+            <AbsDimension x="1000" y="400"/>
         </Size>
         <Anchors>
             <Anchor point="CENTER"/>

@@ -430,12 +430,11 @@ function PriestPower_ScanRaid()
                 if string.find(bname, "fortitude") then buffInfo.hasFort = true end
                 if string.find(bname, "spirit") or string.find(bname, "inspiration") then buffInfo.hasSpirit = true end
                 
-                -- Turtle WoW Custom Spells (Proclaim Champion, etc)
-                -- Standard icons might be used, or custom ones. 
-                -- We check for substrings known in the icon path.
                 if string.find(bname, "proclaimchampion") or string.find(bname, "holychampion") then buffInfo.hasProclaim = true end
                 if string.find(bname, "championsgrace") then buffInfo.hasGrace = true end
                 if string.find(bname, "empowerchampion") then buffInfo.hasEmpower = true end
+                -- Enlighten (Icon: btnholyscriptures)
+                if string.find(bname, "btnholyscriptures") or string.find(bname, "enlighten") then buffInfo.hasEnlighten = true end
                 
                 b = b + 1
             end
@@ -922,11 +921,35 @@ function PriestPower_UpdateUI()
                      btnE:SetAlpha(0.6)
                      getglobal(btnE:GetName().."Text"):SetText("")
                 end
+                
+                -- Enlighten (Config UI Update)
+                -- We are iterating frames: PriestPowerFramePlayerXEnlighten
+                local btnEnFrame = getglobal("PriestPowerFramePlayer"..i.."Enlighten")
+                if btnEnFrame then
+                     local userEnlightenData = PriestPower_LegacyAssignments[name] and PriestPower_LegacyAssignments[name]["Enlighten"]
+                     local btnEnBtn = getglobal(btnEnFrame:GetName().."Enlighten")
+                     if userEnlightenData then
+                          -- Show assigned name or check status?
+                          -- Config UI usually shows icons.
+                          -- Tooltip shows name. Text?
+                          -- Champion assignment doesn't show name on button text (it's in tooltip).
+                          -- But we might want to show "Assigned" state visually.
+                          btnEnBtn:SetAlpha(1.0)
+                     else
+                          btnEnBtn:SetAlpha(0.6)
+                     end
+                     btnEnBtn.tooltipText = "Enlighten: "..(userEnlightenData or "None")
+                end
+                
             else
                 if champText then champText:SetText("") end
+                if enlightText then enlightText:SetText("") end
                 iconP:Hide()
                 iconG:Hide()
                 iconE:Hide()
+                -- Hide Enlighten icon? 
+                -- We only added the button to the frame, we didn't add separate icons like Champion has P/G/E.
+                -- Use alpha to show availability.
             end
         end
         i = i + 1
@@ -936,6 +959,13 @@ function PriestPower_UpdateUI()
     
     PriestPower_UpdateBuffBar()
 end
+
+-- ... [Snip: OnClick Handlers] ...
+
+-- Update BuffBar Row 10 Logic (in PriestPower_UpdateBuffBar later in file)
+-- I need to verify that section is updated correctly in a separate step or below if reachable.
+-- But wait, I'm updating UpdateUI here. I also need to update Row 10 in updatebuffbar.
+
 
 function PriestPowerSubButton_OnClick(btn)
     -- Name format: PriestPowerFramePlayer1Group1Fort
@@ -992,6 +1022,7 @@ end
 
 -- Context for Dropdown (Which priest are we assigning for?)
 PriestPower_ContextName = nil
+PriestPower_AssignMode = "Champ" -- "Champ" or "Enlighten"
 
 function PriestPowerChampButton_OnClick(btn)
     local grandParent = btn:GetParent():GetParent() -- PriestPowerFramePlayerX OR PriestPowerBuffBar
@@ -1010,8 +1041,36 @@ function PriestPowerChampButton_OnClick(btn)
     if not pname then return end
 
     PriestPower_ContextName = pname
+    PriestPower_AssignMode = "Champ"
     
     -- Permission Check
+    if pname ~= UnitName("player") and not PriestPower_IsPromoted() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r: You must be promoted to assign others.")
+        return
+    end
+    
+    ToggleDropDownMenu(1, nil, PriestPowerChampDropDown, btn:GetName(), 0, 0)
+end
+
+function PriestPowerEnlightenButton_OnClick(btn)
+    local grandParent = btn:GetParent():GetParent()
+    local pname = nil
+    
+    if grandParent:GetName() == "PriestPowerBuffBar" then
+        pname = UnitName("player")
+    else
+        local _, _, pid = string.find(grandParent:GetName(), "Player(%d+)")
+        if pid then
+            pid = tonumber(pid)
+            pname = getglobal("PriestPowerFramePlayer"..pid.."Name"):GetText()
+        end
+    end
+    
+    if not pname then return end
+
+    PriestPower_ContextName = pname
+    PriestPower_AssignMode = "Enlighten"
+    
     if pname ~= UnitName("player") and not PriestPower_IsPromoted() then
         DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r: You must be promoted to assign others.")
         return
@@ -1023,19 +1082,31 @@ end
 function PriestPower_AssignChamp_OnClick()
     local targetName = this.value
     local pname = PriestPower_ContextName
+    local mode = PriestPower_AssignMode or "Champ"
     
     if not pname then return end
     
+    PriestPower_LegacyAssignments[pname] = PriestPower_LegacyAssignments[pname] or {}
+
     if targetName == "CLEAR" then
-        PriestPower_LegacyAssignments[pname] = PriestPower_LegacyAssignments[pname] or {}
-        PriestPower_LegacyAssignments[pname]["Champ"] = nil
-        DEFAULT_CHAT_FRAME:AddMessage("Cleared Champion for "..pname)
-        PriestPower_SendMessage("ASSIGNCHAMP "..pname.." nil")
+        PriestPower_LegacyAssignments[pname][mode] = nil
+        DEFAULT_CHAT_FRAME:AddMessage("Cleared "..mode.." for "..pname)
+        -- PriestPower_SendMessage("ASSIGNCHAMP "..pname.." nil") -- Need new message for Enlighten?
+        -- Reusing ASSIGNCHAMP logic might overwrite. Ideally custom message.
+        -- But for now, local state. To sync, we DO need a new message or parameter.
+        -- For simplicity (User hasn't asked for sync protocol update yet), assume local for now or partial sync.
+        -- Legacy ASSIGNCHAMP handled only Champ.
+        -- If we want to sync Enlighten, we need "ASSIGNENLIGHTEN"?
+        -- Let's stick to local + basic sync if mode is Champ.
+        if mode == "Champ" then
+             PriestPower_SendMessage("ASSIGNCHAMP "..pname.." nil")
+        end
     else
-        PriestPower_LegacyAssignments[pname] = PriestPower_LegacyAssignments[pname] or {}
-        PriestPower_LegacyAssignments[pname]["Champ"] = targetName
-        DEFAULT_CHAT_FRAME:AddMessage("Assigned Champion for "..pname..": "..targetName)
-        PriestPower_SendMessage("ASSIGNCHAMP "..pname.." "..targetName)
+        PriestPower_LegacyAssignments[pname][mode] = targetName
+        DEFAULT_CHAT_FRAME:AddMessage("Assigned "..mode.." for "..pname..": "..targetName)
+        if mode == "Champ" then
+             PriestPower_SendMessage("ASSIGNCHAMP "..pname.." "..targetName)
+        end
     end
     
     PriestPower_UpdateUI()
@@ -1182,7 +1253,8 @@ function PriestPowerBuffBar_Create()
     -- 6. Pre-create Row Frames (Pool of 9)
     -- Rows 1-8: Group Buffs
     -- Row 9: Champion
-    for i=1, 9 do
+    -- Row 10: Enlighten
+    for i=1, 10 do
         local row = CreateFrame("Frame", "PriestPowerHUDRow"..i, f)
         row:SetWidth(110)
         row:SetHeight(30)
@@ -1244,6 +1316,12 @@ function PriestPowerBuffBar_Create()
              local btnE = CreateBuffBtn("Empower")
              btnE:SetPoint("LEFT", btnG, "RIGHT", 2, 0)
              getglobal(btnE:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Empower"])
+        elseif i == 10 then
+             l:SetText("Enlight")
+             -- Enlighten Button
+             local btnEn = CreateBuffBtn("Enlighten")
+             btnEn:SetPoint("LEFT", l, "RIGHT", 5, 0)
+             getglobal(btnEn:GetName().."Icon"):SetTexture("Interface\\Icons\\btnholyscriptures")
         else
             l:SetText("Grp "..i)
             
@@ -1329,7 +1407,7 @@ function PriestPower_UpdateBuffBar()
     
 
     if assigns or (PriestPower_LegacyAssignments[pname] and PriestPower_LegacyAssignments[pname]["Champ"]) then
-        for i=1, 9 do
+        for i=1, 10 do
             local row = getglobal("PriestPowerHUDRow"..i)
             local showRow = false
             
@@ -1353,7 +1431,6 @@ function PriestPower_UpdateBuffBar()
                          txtP:SetText("0/1")
                          txtP:SetTextColor(1,0,0)
                      end
-                     -- getglobal(btnP:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Proclaim"]) -- Already set in Create
                      
                      -- GRACE / EMPOWER (Timers)
                      local function GetTimerText(key)
@@ -1379,8 +1456,6 @@ function PriestPower_UpdateBuffBar()
                             btnE:SetAlpha(0.4)
                         elseif status.hasEmpower then
                             btnE:Show(); btnE:SetAlpha(1.0)
-                            -- If overlap desired: btnE:SetPoint("LEFT", btnP, "RIGHT", 2, 0)
-                            -- Logic: Overlap if Grace is hidden?
                             btnE:ClearAllPoints(); btnE:SetPoint("LEFT", btnP, "RIGHT", 2, 0)
                             getglobal(btnE:GetName().."Text"):SetText(GetTimerText("Empower"))
                             btnG:Hide()
@@ -1397,6 +1472,26 @@ function PriestPower_UpdateBuffBar()
                      showRow = true
                  else
                      -- No champ assigned
+                 end
+            elseif i == 10 then
+                 -- ENLIGHTEN ROW (Using Enlighten Assignment)
+                 local target = PriestPower_LegacyAssignments[pname] and PriestPower_LegacyAssignments[pname]["Enlighten"]
+                 if target then
+                     local status = CurrentBuffsByName[target]
+                     local btnEn = getglobal(row:GetName().."Enlighten")
+                     
+                     btnEn:Show()
+                     btnEn.tooltipText = "Enlighten: "..target
+                     local txt = getglobal(btnEn:GetName().."Text")
+                     
+                     if status and status.hasEnlighten then
+                         txt:SetText("1/1")
+                         txt:SetTextColor(0,1,0)
+                     else
+                         txt:SetText("0/1")
+                         txt:SetTextColor(1,0,0)
+                     end
+                     showRow = true
                  end
             elseif assigns[i] and assigns[i] > 0 then
                local val = assigns[i]
@@ -1523,9 +1618,33 @@ function PriestPower_BuffButton_OnClick(btn)
             if UnitName("target") == target then
                 CastSpellByName(spell)
                 TargetLastTarget()
+                -- Force Scan 
+                PriestPower_ScanRaid()
+                PriestPower_UpdateBuffBar() 
             else
                 DEFAULT_CHAT_FRAME:AddMessage("PriestPower: Could not target "..target)
             end
+        end
+    elseif i == 10 then
+        -- Enlighten Logic (Using Enlighten Assignment)
+        local target = PriestPower_LegacyAssignments[pname] and PriestPower_LegacyAssignments[pname]["Enlighten"]
+        if not target then
+            DEFAULT_CHAT_FRAME:AddMessage("PriestPower: No Target Assigned for Enlighten!")
+            return
+        end
+        
+        if suffix == "Enlighten" then
+             ClearTarget()
+             TargetByName(target, true)
+             if UnitName("target") == target then
+                 CastSpellByName("Enlighten")
+                 TargetLastTarget()
+                 -- Force Scan
+                 PriestPower_ScanRaid()
+                 PriestPower_UpdateBuffBar() 
+             else
+                 DEFAULT_CHAT_FRAME:AddMessage("PriestPower: Could not target "..target)
+             end
         end
     else
         -- Group Buff Logic
