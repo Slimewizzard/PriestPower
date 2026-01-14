@@ -1,6 +1,6 @@
 # PriestPower
 
-PriestPower is a priest-focused addon for World of Warcraft 1.12.1 (specifically optimized for **Turtle WoW**). Inspired by the classic PallyPower, it simplifies raid-wide buff management and provides specialized tracking for unique Priest class features.
+PriestPower is a priest-focused addon for World of Warcraft 1.12.1. Inspired by the classic PallyPower, it simplifies raid-wide buff management and provides specialized tracking for unique Priest class features.
 
 ## Features
 
@@ -45,8 +45,7 @@ You can rightclick to spotbuff, left click to refresh the whole group.
 
 ## Credits
 
-- Originally based on **PallyPower** by Relar.
-- Adapted and modernized for **Turtle WoW** and the Priest class.
+- Inspired by the work on **PallyPower** by Relar.
 
 ## Support
 
