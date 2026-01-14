@@ -47,3 +47,9 @@ You can rightclick to spotbuff, left click to refresh the whole group.
 
 - Originally based on **PallyPower** by Relar.
 - Adapted and modernized for **Turtle WoW** and the Priest class.
+
+## Support
+
+- Feel free to add feedback if you like my projects.
+- I aim to make this as good as possible. Preformence, more feature suggestions. 
+- https://buymeacoffee.com/slimewizzard
