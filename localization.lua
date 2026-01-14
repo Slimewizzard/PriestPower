@@ -18,6 +18,19 @@ PriestPower_BuffID = {
     [3] = "Proclaim Champion",
 }
 
+PriestPower_BuffIcon = {
+    [0] = "Interface\\Icons\\Spell_Holy_WordFortitude",
+    [1] = "Interface\\Icons\\Spell_Holy_DivineSpirit",
+    [2] = "Interface\\Icons\\Spell_Shadow_AntiShadow",
+    [3] = "Interface\\Icons\\Spell_Holy_ProclaimChampion",
+}
+
+PriestPower_BuffIconGroup = {
+    [0] = "Interface\\Icons\\Spell_Holy_PrayerOfFortitude",
+    [1] = "Interface\\Icons\\Spell_Holy_PrayerOfSpirit",
+    [2] = "Interface\\Icons\\Spell_Holy_PrayerOfShadowProtection",
+}
+
 SPELL_FORTITUDE = "Power Word: Fortitude"
 SPELL_P_FORTITUDE = "Prayer of Fortitude"
 SPELL_SPIRIT = "Divine Spirit"
