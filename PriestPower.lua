@@ -154,11 +154,27 @@ function PP_CreateResizeGrip(parent, name)
     local btn = CreateFrame("Button", name, parent)
     btn:SetWidth(16); btn:SetHeight(16)
     btn:SetNormalTexture("Interface\\AddOns\\PriestPower\\PriestPower-ResizeGrip.tga")
+    
     btn:SetScript("OnMouseDown", function() 
-        this:GetParent():StartSizing("BOTTOMRIGHT") 
+        if arg1 == "LeftButton" then
+            local p = this:GetParent()
+            p.isResizing = true
+            p.startScale = p:GetScale()
+            p.cursorStartX, p.cursorStartY = GetCursorPosition()
+            this:SetScript("OnUpdate", PriestPower_UI_OnScaleUpdate)
+        end
     end)
     btn:SetScript("OnMouseUp", function() 
-        this:GetParent():StopMovingOrSizing() 
+        local p = this:GetParent()
+        p.isResizing = false
+        this:SetScript("OnUpdate", nil)
+        
+        -- Save scales
+        if p:GetName() == "PriestPowerBuffBar" then
+            PriestPowerBuffBar_SavePosition()
+        elseif p:GetName() == "PriestPowerConfigBase" then
+            PP_PerUser.ConfigScale = p:GetScale()
+        end
     end)
     return btn
 end
@@ -196,7 +212,7 @@ end
 
 function PP_CreateHUDRow(parent, name, id)
     local f = CreateFrame("Frame", name, parent)
-    f:SetWidth(100); f:SetHeight(32)
+    f:SetWidth(140); f:SetHeight(34)
     
     local label = f:CreateFontString(f:GetName().."Label", "OVERLAY", "GameFontNormalSmall")
     label:SetPoint("LEFT", f, "LEFT", 5, 0)
@@ -213,7 +229,7 @@ function PP_CreateHUDRow(parent, name, id)
     
     -- Champion specific buttons if Row 9
     if id == 9 then
-        label:SetText("Champ")
+        label:SetText("Chmp")
         local proc = PP_CreateHUDButton(f, name.."Proclaim")
         proc:SetPoint("LEFT", f, "LEFT", 40, 0)
         getglobal(proc:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Proclaim"])
@@ -229,6 +245,7 @@ function PP_CreateHUDRow(parent, name, id)
         local rev = PP_CreateHUDButton(f, name.."Revive")
         rev:SetPoint("LEFT", emp, "RIGHT", 2, 0)
         getglobal(rev:GetName().."Icon"):SetTexture(PriestPower_ChampionIcons["Revive"])
+        f:SetWidth(180)
     end
     -- EnlightenRow
     if id == 10 then
@@ -360,13 +377,13 @@ function PriestPower_SlashCommandHandler(msg)
             DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r Debug Disabled.")
         end
     elseif msg == "reset" then
-        -- Reset BuffBar position and scale
         if PP_PerUser then
             PP_PerUser.Point = nil
             PP_PerUser.RelativePoint = nil
             PP_PerUser.X = nil
             PP_PerUser.Y = nil
             PP_PerUser.Scale = 0.7
+            PP_PerUser.ConfigScale = 0.8
         end
         local bar = getglobal("PriestPowerBuffBar")
         if bar then
@@ -374,7 +391,10 @@ function PriestPower_SlashCommandHandler(msg)
             bar:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
             bar:SetScale(0.7)
         end
-        DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r BuffBar reset to default position and scale.")
+        if PriestPowerConfigBase then
+            PriestPowerConfigBase:SetScale(0.8)
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffe00aPriestPower|r UI reset to default position and scale.")
     elseif msg == "revive" or msg == "reviveChamp" then
         local pname = UnitName("player")
         local target = PriestPower_LegacyAssignments[pname] and PriestPower_LegacyAssignments[pname]["Champ"]
@@ -1217,6 +1237,13 @@ function PriestPowerConfig_Create()
     f:SetClampedToScreen(true)
     f:Hide()
     
+    -- Apply Saved Scale
+    if PP_PerUser and PP_PerUser.ConfigScale then
+        f:SetScale(PP_PerUser.ConfigScale)
+    else
+        f:SetScale(0.8) -- Default zoomed out slightly for big window
+    end
+    
     -- Title
     local t = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     t:SetPoint("TOP", f, "TOP", 0, -18)
@@ -1231,16 +1258,8 @@ function PriestPowerConfig_Create()
     f:SetScript("OnMouseUp", function() this:StopMovingOrSizing() end)
     
     -- Resize Grip (Bottom Right)
-    local grip = CreateFrame("Button", f:GetName().."ResizeGrip", f)
-    grip:SetWidth(16); grip:SetHeight(16)
+    local grip = PP_CreateResizeGrip(f, f:GetName().."ResizeGrip")
     grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -15, 15)
-    grip:SetNormalTexture("Interface\\AddOns\\PriestPower\\PriestPower-ResizeGrip.tga")
-    grip:SetScript("OnMouseDown", function() 
-        this:GetParent():StartSizing("BOTTOMRIGHT") 
-    end)
-    grip:SetScript("OnMouseUp", function() 
-        this:GetParent():StopMovingOrSizing() 
-    end)
 
     -- Container for ScrollFrame (if needed, but user just wanted scalable window)
     -- For now, fixed list of rows inside the scalable frame.
@@ -1592,28 +1611,12 @@ function PriestPowerBuffBar_Create()
     lbl:SetText("PriestPower")
     
     -- 5. Resize Grip (Custom Button)
-    local grip = CreateFrame("Button", f:GetName().."ResizeGrip", f)
-    grip:SetWidth(16); grip:SetHeight(16)
+    local grip = PP_CreateResizeGrip(f, f:GetName().."ResizeGrip")
     grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, 2)
-    grip:SetNormalTexture("Interface\\AddOns\\PriestPower\\Images\\ResizeGrip")
-    -- Or use standard texture if custom one missing, e.g. ChatFrame
+    -- Remove old texture/script as PP_CreateResizeGrip handles it
     grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
     grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
     grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
-    
-    grip:SetScript("OnMouseDown", function()
-        local p = this:GetParent()
-        p.isResizing = true
-        p.startScale = p:GetScale()
-        p.cursorStartX, p.cursorStartY = GetCursorPosition()
-        this:SetScript("OnUpdate", PriestPowerBuffBar_ResizeUpdate)
-    end)
-    grip:SetScript("OnMouseUp", function()
-        local p = this:GetParent()
-        p.isResizing = false
-        this:SetScript("OnUpdate", nil)
-        PriestPowerBuffBar_SavePosition()
-    end)
     
     -- 6. Pre-create Row Frames (Pool of 9)
     -- Rows 1-8: Group Buffs
@@ -1664,53 +1667,19 @@ function PriestPowerBuffBar_RestorePosition()
     end
 end
 
-function PriestPowerBuffBar_ResizeUpdate()
-    local parent = this:GetParent()
-    if not parent.isResizing then return end
+function PriestPower_UI_OnScaleUpdate()
+    local p = this:GetParent()
+    if not p.isResizing then return end
     
     local cursorX, cursorY = GetCursorPosition()
-    
-    -- Scale logic:
-    -- Calculate distance moved from start
-    local diff = (cursorX - parent.cursorStartX)
-    -- Normalize by UI Scale (IMPORTANT)
+    local diff = (cursorX - p.cursorStartX)
     diff = diff / UIParent:GetEffectiveScale()
     
-    local newScale = parent.startScale + (diff * 0.002) -- Sensitivity
-    
+    local newScale = p.startScale + (diff * 0.002)
     if newScale < 0.5 then newScale = 0.5 end
     if newScale > 2.0 then newScale = 2.0 end
     
-    -- Standard Scale Logic using StartSizing
-    -- The base frame uses StartSizing("BOTTOMRIGHT"), which natively resizes width/height.
-    -- However, the user wants "Scale" (Zoom).
-    -- If we use standard StartSizing, it changes Width/Height.
-    -- If we want to Zoom, we need to intercept OnSizeChanged or use a custom Drag handle.
-    -- I implemented a custom Grip with OnMouseDown -> StartSizing.
-    -- Wait, StartSizing resizes the dimension.
-    -- IF we want to Scale, we need to calculate distance and SetScale.
-    
-    -- Let's stick to the custom ResizeUpdate logic I had for BuffBar if we want Scale.
-    -- BUT for Config Window, usually resizing dimensions is better to see more rows?
-    -- User said "scaled such easier by dragging".
-    -- If I implemented StartSizing("BOTTOMRIGHT"), it changes width/height.
-    -- The ROWS are fixed width (1000).
-    -- So changing width of container doesn't help much unless we use a ScrollFrame.
-    -- Scaling the WHOLE frame (Zoom it bigger/smaller) seems to be what is requested.
-    
-    -- Let's replace the Grip script in Create() to use a custom scaling loop instead of StartSizing.
-    -- OR, modify the ResizeUpdate function to be generic.
-    
-    -- Actually, simpler: Use the ResizeGrip I added in Create().
-    -- I assigned it `StartSizing`. This will resize the frame's boundary.
-    -- Since content is fixed size, this just clips or adds empty space.
-    -- To achieve "Zoom", we need to SetScale based on mouse movement.
-    
-    -- Let's use the explicit Scale Logic:
-    local f = parent
-    local msg = "Scale: "..format("%.2f", newScale)
-    f:SetScale(newScale)
-    -- Show feedback?
+    p:SetScale(newScale)
 end
 
 
@@ -1879,16 +1848,17 @@ function PriestPower_UpdateBuffBar()
     end
     
     -- Resize Main Frame
-    local newHeight = 25 + (count * 30)
+    local newHeight = 25 + (count * 34)
     if newHeight < 40 then newHeight = 40 end
     f:SetHeight(newHeight)
     
     -- Dynamic Width? If Champ is visible (which is row 9), widen parent?
     local lastRowIsChamp = (lastRow and lastRow:GetName() == "PriestPowerHUDRow9")
-    if lastRowIsChamp then
-         f:SetWidth(150)
+    local lastRowIsEnlight = (lastRow and lastRow:GetName() == "PriestPowerHUDRow10")
+    if lastRowIsChamp or lastRowIsEnlight then
+         f:SetWidth(185)
     else
-         f:SetWidth(110)
+         f:SetWidth(145)
     end
 end
 
