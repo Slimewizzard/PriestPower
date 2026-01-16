@@ -65,11 +65,11 @@ Priest.BuffTimers = {}
 Priest.RankInfo = {}
 
 -- Timers
-Priest.NextScan = 10
 Priest.UpdateTimer = 0
 Priest.LastRequest = 0
 Priest.RosterDirty = false
 Priest.RosterTimer = 0.5
+Priest.UIDirty = false  -- New: only update UI when data changed
 
 -- Context for dropdowns
 Priest.ContextName = nil
@@ -122,12 +122,16 @@ function Priest:MigrateSavedVars()
 end
 
 function Priest:OnEvent(event)
-    if event == "SPELLS_CHANGED" or event == "PLAYER_ENTERING_WORLD" then
+    if event == "SPELLS_CHANGED" then
+        -- Only scan spells when they actually change
+        self:ScanSpells()
+        self.UIDirty = true
+        
+    elseif event == "PLAYER_ENTERING_WORLD" then
         self:ScanSpells()
         self:ScanRaid()
-        if event == "PLAYER_ENTERING_WORLD" then
-            self:RequestSync()
-        end
+        self:RequestSync()
+        self.UIDirty = true
         
     elseif event == "PARTY_MEMBERS_CHANGED" or event == "RAID_ROSTER_UPDATE" then
         if event == "RAID_ROSTER_UPDATE" then
@@ -135,7 +139,7 @@ function Priest:OnEvent(event)
             self.RosterTimer = 0.5
         else
             self:ScanRaid()
-            self:UpdateUI()
+            self.UIDirty = true
         end
         
         if event == "RAID_ROSTER_UPDATE" then
@@ -146,43 +150,49 @@ function Priest:OnEvent(event)
         end
         
     elseif event == "CHAT_MSG_SPELL_SELF_BUFF" then
-        -- arg1 is passed through OnEvent
+        -- Mark dirty so next scan picks up the change
+        self.UIDirty = true
     end
 end
 
 function Priest:OnUpdate(elapsed)
     if not elapsed then elapsed = 0.01 end
     
-    -- Spell scan timer
-    self.NextScan = self.NextScan - elapsed
-    if self.NextScan <= 0 then
-        self.NextScan = CP_PerUser.scanfreq or 10
-        self:ScanSpells()
-    end
-    
-    -- Delayed roster scan
+    -- Delayed roster scan (after raid roster changes)
     if self.RosterDirty then
         self.RosterTimer = self.RosterTimer - elapsed
         if self.RosterTimer <= 0 then
             self.RosterDirty = false
             self.RosterTimer = 0.5
             self:ScanRaid()
-            self:UpdateUI()
+            self.UIDirty = true
         end
     end
     
-    -- UI refresh (1s interval)
+    -- UI refresh (5s interval - buffs don't change that fast)
     self.UpdateTimer = self.UpdateTimer - elapsed
     if self.UpdateTimer <= 0 then
-        self.UpdateTimer = 1.0
+        self.UpdateTimer = 5.0
         
+        -- Only scan and update if UI is visible
+        local needsScan = false
         if self.BuffBar and self.BuffBar:IsVisible() then
-            self:ScanRaid()
-            self:UpdateBuffBar()
+            needsScan = true
+        end
+        if self.ConfigWindow and self.ConfigWindow:IsVisible() then
+            needsScan = true
         end
         
-        if self.ConfigWindow and self.ConfigWindow:IsVisible() then
-            self:UpdateConfigGrid()
+        if needsScan then
+            self:ScanRaid()
+            self:UpdateUI()
+        end
+    -- Also update immediately if dirty flag is set and UI is visible
+    elseif self.UIDirty then
+        self.UIDirty = false
+        if (self.BuffBar and self.BuffBar:IsVisible()) or 
+           (self.ConfigWindow and self.ConfigWindow:IsVisible()) then
+            self:UpdateUI()
         end
     end
 end
@@ -478,13 +488,14 @@ function Priest:OnAddonMessage(sender, msg)
         else
             self.LegacyAssignments[sender]["Champ"] = nil
         end
+        self.UIDirty = true
     elseif string.find(msg, "^ASSIGN ") then
         local _, _, name, class, skill = string.find(msg, "^ASSIGN (.-) (.-) (.*)")
         if name and class and skill then
             if sender == name or ClassPower_IsPromoted(sender) then
                 self.Assignments[name] = self.Assignments[name] or {}
                 self.Assignments[name][tonumber(class)] = tonumber(skill)
-                self:UpdateUI()
+                self.UIDirty = true
             end
         end
     elseif string.find(msg, "^ASSIGNCHAMP ") then
@@ -494,7 +505,7 @@ function Priest:OnAddonMessage(sender, msg)
                 if target == "nil" or target == "" then target = nil end
                 self.LegacyAssignments[name] = self.LegacyAssignments[name] or {}
                 self.LegacyAssignments[name]["Champ"] = target
-                self:UpdateUI()
+                self.UIDirty = true
             end
         end
     elseif string.find(msg, "^CLEAR ") then
@@ -506,7 +517,7 @@ function Priest:OnAddonMessage(sender, msg)
                 if target == UnitName("player") then
                     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Assignments cleared by "..sender)
                 end
-                self:UpdateUI()
+                self.UIDirty = true
             end
         end
     end
@@ -722,6 +733,7 @@ function Priest:UpdateBuffBar()
             end
         elseif assigns and assigns[i] and assigns[i] > 0 then
             local val = assigns[i]
+            -- Decode states - any non-zero means assigned
             local fS = math.mod(val, 4)
             local sS = math.mod(math.floor(val/4), 4)
             local shS = math.mod(math.floor(val/16), 4)
@@ -739,17 +751,13 @@ function Priest:UpdateBuffBar()
                     end
                     if missing > 0 then
                         btn:Show()
-                        btn.tooltipText = "Group "..i..": "..label
-                        btn.assignmentState = state
+                        btn.tooltipText = "Group "..i..": "..label.."\nLeft-click: Prayer (group)\nRight-click: Single target"
                         local txt = getglobal(btn:GetName().."Text")
                         local icon = getglobal(btn:GetName().."Icon")
                         txt:SetText((total-missing).."/"..total)
                         txt:SetTextColor(1,0,0)
-                        if state == 1 then
-                            icon:SetTexture(self.BuffIconsGroup[typeIdx])
-                        else
-                            icon:SetTexture(self.BuffIcons[typeIdx])
-                        end
+                        -- Always show group icon
+                        icon:SetTexture(self.BuffIconsGroup[typeIdx])
                         return true
                     else
                         btn:Hide()
@@ -1123,6 +1131,7 @@ function Priest:UpdateGroupButtons(rowIndex, priestName)
     
     for g = 1, 8 do
         local val = assigns[g] or 0
+        -- Decode states - any non-zero means assigned
         local fState = math.mod(val, 4)
         local sState = math.mod(math.floor(val/4), 4)
         local shState = math.mod(math.floor(val/16), 4)
@@ -1136,11 +1145,8 @@ function Priest:UpdateGroupButtons(rowIndex, priestName)
             local text = getglobal(btn:GetName().."Text")
             
             if state > 0 then
-                if state == 1 then
-                    icon:SetTexture(self.BuffIconsGroup[typeIdx])
-                else
-                    icon:SetTexture(self.BuffIcons[typeIdx])
-                end
+                -- Assigned - always show group icon (Prayer buff)
+                icon:SetTexture(self.BuffIconsGroup[typeIdx])
                 icon:Show()
                 btn:SetAlpha(1.0)
                 
@@ -1367,26 +1373,32 @@ function Priest:SubButton_OnClick(btn)
     self.Assignments[priestName] = self.Assignments[priestName] or {}
     local cur = self.Assignments[priestName][grpIdx] or 0
     
+    -- Decode current states (each buff uses 2 bits, but we only use 0 or 1)
     local f = math.mod(cur, 4)
     local s = math.mod(math.floor(cur/4), 4)
     local sh = math.mod(math.floor(cur/16), 4)
     
-    -- Shift-click cycles all three buffs together
+    -- Normalize to 0 or 1
+    if f > 0 then f = 1 end
+    if s > 0 then s = 1 end
+    if sh > 0 then sh = 1 end
+    
+    -- Shift-click toggles all three buffs together
     if IsShiftKeyDown() then
-        local maxState = f
-        if s > maxState then maxState = s end
-        if sh > maxState then maxState = sh end
-        local newState = math.mod(maxState + 1, 3)
-        f = newState
-        s = newState
-        sh = newState
+        -- If any are on, turn all off; otherwise turn all on
+        if f > 0 or s > 0 or sh > 0 then
+            f = 0; s = 0; sh = 0
+        else
+            f = 1; s = 1; sh = 1
+        end
     else
+        -- Simple toggle for individual buff
         if buffType == "Fort" then
-            f = math.mod(f + 1, 3)
+            f = (f > 0) and 0 or 1
         elseif buffType == "Spirit" then
-            s = math.mod(s + 1, 3)
+            s = (s > 0) and 0 or 1
         elseif buffType == "Shadow" then
-            sh = math.mod(sh + 1, 3)
+            sh = (sh > 0) and 0 or 1
         end
     end
     
@@ -1408,10 +1420,13 @@ function Priest:SubButton_OnEnter(btn)
     elseif buffType == "Shadow" then label = "Shadow Protection"
     end
     GameTooltip:SetText(label)
-    GameTooltip:AddLine("Click to cycle:", 1, 1, 1)
-    GameTooltip:AddLine("Off -> Group -> Single", 0.7, 0.7, 0.7)
+    GameTooltip:AddLine("Click to toggle assignment", 1, 1, 1)
     GameTooltip:AddLine(" ", 1, 1, 1)
-    GameTooltip:AddLine("Shift-Click: Cycle ALL buffs", 0, 1, 0)
+    GameTooltip:AddLine("On HUD:", 1, 0.8, 0)
+    GameTooltip:AddLine("Left-click: Prayer (group buff)", 0.7, 0.7, 0.7)
+    GameTooltip:AddLine("Right-click: Single target buff", 0.7, 0.7, 0.7)
+    GameTooltip:AddLine(" ", 1, 1, 1)
+    GameTooltip:AddLine("Shift-Click: Toggle ALL buffs", 0, 1, 0)
     GameTooltip:Show()
 end
 
@@ -1612,6 +1627,7 @@ function Priest:AssignTarget_OnClick()
         ClassPower_SendMessage("ASSIGNCHAMP "..pname.." "..targetName)
     end
     
+    self.UIDirty = true
     self:UpdateUI()
     CloseDropDownMenus()
 end
