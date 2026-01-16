@@ -65,11 +65,11 @@ Priest.BuffTimers = {}
 Priest.RankInfo = {}
 
 -- Timers
-Priest.NextScan = 10
 Priest.UpdateTimer = 0
 Priest.LastRequest = 0
 Priest.RosterDirty = false
 Priest.RosterTimer = 0.5
+Priest.UIDirty = false  -- New: only update UI when data changed
 
 -- Context for dropdowns
 Priest.ContextName = nil
@@ -122,12 +122,16 @@ function Priest:MigrateSavedVars()
 end
 
 function Priest:OnEvent(event)
-    if event == "SPELLS_CHANGED" or event == "PLAYER_ENTERING_WORLD" then
+    if event == "SPELLS_CHANGED" then
+        -- Only scan spells when they actually change
+        self:ScanSpells()
+        self.UIDirty = true
+        
+    elseif event == "PLAYER_ENTERING_WORLD" then
         self:ScanSpells()
         self:ScanRaid()
-        if event == "PLAYER_ENTERING_WORLD" then
-            self:RequestSync()
-        end
+        self:RequestSync()
+        self.UIDirty = true
         
     elseif event == "PARTY_MEMBERS_CHANGED" or event == "RAID_ROSTER_UPDATE" then
         if event == "RAID_ROSTER_UPDATE" then
@@ -135,7 +139,7 @@ function Priest:OnEvent(event)
             self.RosterTimer = 0.5
         else
             self:ScanRaid()
-            self:UpdateUI()
+            self.UIDirty = true
         end
         
         if event == "RAID_ROSTER_UPDATE" then
@@ -146,43 +150,49 @@ function Priest:OnEvent(event)
         end
         
     elseif event == "CHAT_MSG_SPELL_SELF_BUFF" then
-        -- arg1 is passed through OnEvent
+        -- Mark dirty so next scan picks up the change
+        self.UIDirty = true
     end
 end
 
 function Priest:OnUpdate(elapsed)
     if not elapsed then elapsed = 0.01 end
     
-    -- Spell scan timer
-    self.NextScan = self.NextScan - elapsed
-    if self.NextScan <= 0 then
-        self.NextScan = CP_PerUser.scanfreq or 10
-        self:ScanSpells()
-    end
-    
-    -- Delayed roster scan
+    -- Delayed roster scan (after raid roster changes)
     if self.RosterDirty then
         self.RosterTimer = self.RosterTimer - elapsed
         if self.RosterTimer <= 0 then
             self.RosterDirty = false
             self.RosterTimer = 0.5
             self:ScanRaid()
-            self:UpdateUI()
+            self.UIDirty = true
         end
     end
     
-    -- UI refresh (1s interval)
+    -- UI refresh (5s interval - buffs don't change that fast)
     self.UpdateTimer = self.UpdateTimer - elapsed
     if self.UpdateTimer <= 0 then
-        self.UpdateTimer = 1.0
+        self.UpdateTimer = 5.0
         
+        -- Only scan and update if UI is visible
+        local needsScan = false
         if self.BuffBar and self.BuffBar:IsVisible() then
-            self:ScanRaid()
-            self:UpdateBuffBar()
+            needsScan = true
+        end
+        if self.ConfigWindow and self.ConfigWindow:IsVisible() then
+            needsScan = true
         end
         
-        if self.ConfigWindow and self.ConfigWindow:IsVisible() then
-            self:UpdateConfigGrid()
+        if needsScan then
+            self:ScanRaid()
+            self:UpdateUI()
+        end
+    -- Also update immediately if dirty flag is set and UI is visible
+    elseif self.UIDirty then
+        self.UIDirty = false
+        if (self.BuffBar and self.BuffBar:IsVisible()) or 
+           (self.ConfigWindow and self.ConfigWindow:IsVisible()) then
+            self:UpdateUI()
         end
     end
 end
@@ -478,13 +488,14 @@ function Priest:OnAddonMessage(sender, msg)
         else
             self.LegacyAssignments[sender]["Champ"] = nil
         end
+        self.UIDirty = true
     elseif string.find(msg, "^ASSIGN ") then
         local _, _, name, class, skill = string.find(msg, "^ASSIGN (.-) (.-) (.*)")
         if name and class and skill then
             if sender == name or ClassPower_IsPromoted(sender) then
                 self.Assignments[name] = self.Assignments[name] or {}
                 self.Assignments[name][tonumber(class)] = tonumber(skill)
-                self:UpdateUI()
+                self.UIDirty = true
             end
         end
     elseif string.find(msg, "^ASSIGNCHAMP ") then
@@ -494,7 +505,7 @@ function Priest:OnAddonMessage(sender, msg)
                 if target == "nil" or target == "" then target = nil end
                 self.LegacyAssignments[name] = self.LegacyAssignments[name] or {}
                 self.LegacyAssignments[name]["Champ"] = target
-                self:UpdateUI()
+                self.UIDirty = true
             end
         end
     elseif string.find(msg, "^CLEAR ") then
@@ -506,7 +517,7 @@ function Priest:OnAddonMessage(sender, msg)
                 if target == UnitName("player") then
                     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Assignments cleared by "..sender)
                 end
-                self:UpdateUI()
+                self.UIDirty = true
             end
         end
     end
@@ -1616,6 +1627,7 @@ function Priest:AssignTarget_OnClick()
         ClassPower_SendMessage("ASSIGNCHAMP "..pname.." "..targetName)
     end
     
+    self.UIDirty = true
     self:UpdateUI()
     CloseDropDownMenus()
 end
