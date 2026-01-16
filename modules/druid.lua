@@ -70,6 +70,11 @@ function Druid:OnLoad()
         self.ThornsList = CP_PerUser.DruidThornsList
     end
     
+    -- Load saved Innervate thresholds
+    if CP_PerUser.DruidInnervateThreshold then
+        self.InnervateThreshold = CP_PerUser.DruidInnervateThreshold
+    end
+    
     -- Initial spell scan
     self:ScanSpells()
     self:ScanRaid()
@@ -406,6 +411,65 @@ function Druid:SaveThornsList()
     CP_PerUser.DruidThornsList = self.ThornsList
 end
 
+function Druid:SaveInnervateThreshold()
+    CP_PerUser.DruidInnervateThreshold = self.InnervateThreshold
+end
+
+function Druid:GetInnervateThreshold(druidName)
+    return self.InnervateThreshold[druidName] or 0
+end
+
+function Druid:SetInnervateThreshold(druidName, value)
+    if not druidName then return end
+    value = tonumber(value) or 0
+    if value < 0 then value = 0 end
+    if value > 100 then value = 100 end
+    self.InnervateThreshold[druidName] = value
+    self:SaveInnervateThreshold()
+end
+
+function Druid:GetTargetManaPercent(targetName)
+    -- Find the unit for this target and return their mana %
+    local numRaid = GetNumRaidMembers()
+    local numParty = GetNumPartyMembers()
+    
+    if numRaid > 0 then
+        for i = 1, numRaid do
+            local name = UnitName("raid"..i)
+            if name == targetName then
+                local mana = UnitMana("raid"..i)
+                local manaMax = UnitManaMax("raid"..i)
+                if manaMax > 0 then
+                    return math.floor((mana / manaMax) * 100)
+                end
+                return 100
+            end
+        end
+    elseif numParty > 0 then
+        if UnitName("player") == targetName then
+            local mana = UnitMana("player")
+            local manaMax = UnitManaMax("player")
+            if manaMax > 0 then
+                return math.floor((mana / manaMax) * 100)
+            end
+            return 100
+        end
+        for i = 1, numParty do
+            local name = UnitName("party"..i)
+            if name == targetName then
+                local mana = UnitMana("party"..i)
+                local manaMax = UnitManaMax("party"..i)
+                if manaMax > 0 then
+                    return math.floor((mana / manaMax) * 100)
+                end
+                return 100
+            end
+        end
+    end
+    
+    return 100  -- Default to 100% if not found
+end
+
 function Druid:GetThornsListCount(druidName)
     if not self.ThornsList[druidName] then return 0 end
     return table.getn(self.ThornsList[druidName])
@@ -593,8 +657,8 @@ function Druid:CreateBuffBar()
         Druid:SaveBuffBarPosition()
     end)
     
-    -- Create rows: 8 groups + 1 Thorns row + 1 Emerald row
-    for i = 1, 10 do
+    -- Create rows: 8 groups + 1 Thorns row + 1 Emerald row + 1 Innervate row
+    for i = 1, 11 do
         local row = self:CreateHUDRow(f, "ClassPowerDruidHUDRow"..i, i)
         row:Hide()
     end
@@ -627,6 +691,8 @@ function Druid:CreateHUDRow(parent, name, id)
         label:SetText("Thrns")
     elseif id == 10 then
         label:SetText("Emrld")
+    elseif id == 11 then
+        label:SetText("Innerv")
     else
         label:SetText("Grp "..id)
     end
@@ -652,6 +718,14 @@ function Druid:CreateHUDRow(parent, name, id)
         emerald:SetScript("OnClick", function() Druid:BuffButton_OnClick(this) end)
     end
     
+    if id == 11 then
+        -- Innervate row - shows when target mana is below threshold
+        local innervate = CP_CreateHUDButton(f, name.."Innervate")
+        innervate:SetPoint("LEFT", f, "LEFT", 40, 0)
+        getglobal(innervate:GetName().."Icon"):SetTexture(self.SpecialIcons["Innervate"])
+        innervate:SetScript("OnClick", function() Druid:BuffButton_OnClick(this) end)
+    end
+    
     return f
 end
 
@@ -675,7 +749,7 @@ function Druid:UpdateBuffBar()
     local lastRow = nil
     local count = 0
     
-    for i = 1, 10 do
+    for i = 1, 11 do
         local row = getglobal("ClassPowerDruidHUDRow"..i)
         if not row then break end
         
@@ -724,6 +798,29 @@ function Druid:UpdateBuffBar()
                 end
             else
                 btnEm:Hide()
+            end
+        elseif i == 11 then
+            -- Innervate row - show when target mana is below threshold
+            local btnInn = getglobal(row:GetName().."Innervate")
+            local target = self.LegacyAssignments[pname] and self.LegacyAssignments[pname]["Innervate"]
+            local threshold = self:GetInnervateThreshold(pname)
+            local hasInnervate = self.RankInfo and self.RankInfo["Innervate"]
+            
+            if hasInnervate and target and threshold > 0 then
+                local manaPercent = self:GetTargetManaPercent(target)
+                local status = self.CurrentBuffsByName[target]
+                
+                if status and not status.dead and manaPercent <= threshold then
+                    btnInn:Show()
+                    btnInn.tooltipText = "Innervate: "..target.." ("..manaPercent.."%)"
+                    getglobal(btnInn:GetName().."Text"):SetText(manaPercent.."%")
+                    getglobal(btnInn:GetName().."Text"):SetTextColor(1, 0.5, 0)
+                    showRow = true
+                else
+                    btnInn:Hide()
+                end
+            else
+                btnInn:Hide()
             end
         elseif assigns and assigns[i] and assigns[i] > 0 then
             local val = assigns[i]
@@ -798,7 +895,7 @@ function Druid:CreateConfigWindow()
     end
     
     local f = CreateFrame("Frame", "ClassPowerDruidConfig", UIParent)
-    f:SetWidth(820)
+    f:SetWidth(860)
     f:SetHeight(450)
     f:SetPoint("CENTER", 0, 0)
     f:SetBackdrop({
@@ -879,6 +976,10 @@ function Druid:CreateConfigWindow()
     local lblInnerv = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     lblInnerv:SetPoint("TOPLEFT", f, "TOPLEFT", 660, headerY)
     lblInnerv:SetText("Innerv")
+    
+    local lblMana = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lblMana:SetPoint("TOPLEFT", f, "TOPLEFT", 720, headerY)
+    lblMana:SetText("Mana%")
     
     for i = 1, 10 do
         self:CreateConfigRow(f, i)
@@ -1001,6 +1102,44 @@ function Druid:CreateConfigRow(parent, rowIndex)
     innervName:SetWidth(50)
     innervName:SetText("")
     
+    -- Innervate mana threshold slider
+    local thresholdSlider = CreateFrame("Slider", rowName.."InnervateThreshold", row, "OptionsSliderTemplate")
+    thresholdSlider:SetWidth(60)
+    thresholdSlider:SetHeight(14)
+    thresholdSlider:SetPoint("TOPLEFT", row, "TOPLEFT", 700, -10)
+    thresholdSlider:SetMinMaxValues(0, 100)
+    thresholdSlider:SetValueStep(5)
+    thresholdSlider:SetValue(0)
+    thresholdSlider:SetOrientation("HORIZONTAL")
+    
+    -- Hide the default min/max text
+    getglobal(thresholdSlider:GetName().."Low"):SetText("")
+    getglobal(thresholdSlider:GetName().."High"):SetText("")
+    getglobal(thresholdSlider:GetName().."Text"):SetText("")
+    
+    -- Create our own value display
+    local thresholdValue = row:CreateFontString(rowName.."ThresholdValue", "OVERLAY", "GameFontHighlightSmall")
+    thresholdValue:SetPoint("TOP", thresholdSlider, "BOTTOM", 0, 0)
+    thresholdValue:SetText("0%")
+    
+    thresholdSlider:SetScript("OnValueChanged", function()
+        local val = math.floor(this:GetValue())
+        getglobal(this:GetParent():GetName().."ThresholdValue"):SetText(val.."%")
+        Druid:ThresholdSlider_OnChange(this, val)
+    end)
+    thresholdSlider:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Innervate Mana Threshold")
+        GameTooltip:AddLine("Show Innervate button when target", 1, 1, 1)
+        GameTooltip:AddLine("mana drops below this percentage.", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(" ", 1, 1, 1)
+        GameTooltip:AddLine("Set to 0 to disable.", 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    thresholdSlider:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
     row:Hide()
     return row
 end
@@ -1024,7 +1163,7 @@ function Druid:UpdateConfigGrid()
             if nameStr then 
                 local displayName = druidName
                 if string.len(druidName) > 10 then
-                    displayName = string.sub(druidName, 1, 9).."."
+                    displayName = string.sub(druidName, 1, 9)..". "
                 end
                 nameStr:SetText(displayName) 
             end
@@ -1179,10 +1318,13 @@ end
 function Druid:UpdateInnervateButton(rowIndex, druidName)
     local btn = getglobal("CPDruidRow"..rowIndex.."Innervate")
     local nameLabel = getglobal("CPDruidRow"..rowIndex.."InnervateName")
+    local thresholdSlider = getglobal("CPDruidRow"..rowIndex.."InnervateThreshold")
+    local thresholdValue = getglobal("CPDruidRow"..rowIndex.."ThresholdValue")
     if not btn then return end
     
     local icon = getglobal(btn:GetName().."Icon")
     local target = self.LegacyAssignments[druidName] and self.LegacyAssignments[druidName]["Innervate"]
+    local threshold = self:GetInnervateThreshold(druidName)
     
     icon:SetTexture(self.SpecialIcons["Innervate"])
     
@@ -1197,6 +1339,40 @@ function Druid:UpdateInnervateButton(rowIndex, druidName)
         if nameLabel then nameLabel:SetText("") end
         getglobal(btn:GetName().."Text"):SetText("")
     end
+    
+    -- Update threshold slider
+    if thresholdSlider then
+        thresholdSlider:SetValue(threshold)
+        if thresholdValue then
+            thresholdValue:SetText(threshold.."%")
+        end
+        -- Only allow editing own threshold
+        if druidName == UnitName("player") then
+            thresholdSlider:EnableMouse(true)
+            thresholdSlider:SetAlpha(1.0)
+        else
+            thresholdSlider:EnableMouse(false)
+            thresholdSlider:SetAlpha(0.5)
+        end
+    end
+end
+
+function Druid:ThresholdSlider_OnChange(slider, value)
+    local sliderName = slider:GetName()
+    local _, _, rowIdx = string.find(sliderName, "CPDruidRow(%d+)InnervateThreshold")
+    if not rowIdx then return end
+    
+    local nameStr = getglobal("CPDruidRow"..rowIdx.."Name")
+    local druidName = nameStr and nameStr:GetText()
+    if not druidName then return end
+    
+    -- Only allow editing own threshold
+    if druidName ~= UnitName("player") then
+        return
+    end
+    
+    self:SetInnervateThreshold(druidName, value)
+    self:UpdateBuffBar()
 end
 
 -----------------------------------------------------------------------------------
@@ -1237,6 +1413,28 @@ function Druid:BuffButton_OnClick(btn)
     elseif i == 10 then
         -- Emerald Blessing - just cast it (self-cast raid buff)
         CastSpellByName(self.Spells.EMERALD)
+    elseif i == 11 then
+        -- Innervate - cast on assigned target
+        local target = self.LegacyAssignments[pname] and self.LegacyAssignments[pname]["Innervate"]
+        if target then
+            ClearTarget()
+            TargetByName(target, true)
+            if UnitName("target") == target then
+                if CheckInteractDistance("target", 4) then
+                    CastSpellByName(self.Spells.INNERVATE)
+                    TargetLastTarget()
+                    self:ScanRaid()
+                    self:UpdateBuffBar()
+                else
+                    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: "..target.." is out of range!")
+                    TargetLastTarget()
+                end
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Could not target "..target)
+            end
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No Innervate target assigned!")
+        end
     else
         -- Group buff (MotW/GotW)
         local gid = i
@@ -1390,6 +1588,7 @@ function Druid:ThornsButton_OnEnter(btn)
         for _, name in ipairs(thornsList) do
             local status = self.CurrentBuffsByName[name]
             if status then
+                if status.hasThorns then
                     GameTooltip:AddLine("  "..name.." |cff00ff00(buffed)|r", 0.7, 0.7, 0.7)
                 else
                     GameTooltip:AddLine("  "..name.." |cffff0000(missing)|r", 0.7, 0.7, 0.7)
