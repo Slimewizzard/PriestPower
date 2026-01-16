@@ -332,6 +332,9 @@ eventFrame:SetScript("OnUpdate", function() ClassPower_OnUpdate(arg1) end)
 SlashCmdList["CLASSPOWER"] = ClassPower_SlashHandler
 SLASH_CLASSPOWER1 = "/cp"
 SLASH_CLASSPOWER2 = "/classpower"
+SLASH_CLASSPOWER3 = "/prip"
+SLASH_CLASSPOWER4 = "/prp"
+SLASH_CLASSPOWER5 = "/priestpower"
 
 -- Create dropdown frame for menus
 if not getglobal("ClassPowerDropDown") then
