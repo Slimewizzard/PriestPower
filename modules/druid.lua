@@ -823,45 +823,30 @@ function Druid:UpdateBuffBar()
                 btnInn:Hide()
             end
         elseif assigns and assigns[i] and assigns[i] > 0 then
-            local val = assigns[i]
-            local motwS = math.mod(val, 4)
-            
-            local function UpdateHUD(btn, state, typeIdx, buffKey, label)
-                if not btn then return false end
-                if state > 0 then
-                    local missing = 0
-                    local total = 0
-                    if self.CurrentBuffs[i] then
-                        for _, m in self.CurrentBuffs[i] do
-                            total = total + 1
-                            if not m[buffKey] and not m.dead then missing = missing + 1 end
-                        end
+            -- Group assigned - show MotW button if anyone is missing the buff
+            local btnMotW = getglobal(row:GetName().."MotW")
+            if btnMotW then
+                local missing = 0
+                local total = 0
+                if self.CurrentBuffs[i] then
+                    for _, m in self.CurrentBuffs[i] do
+                        total = total + 1
+                        if not m.hasMotW and not m.dead then missing = missing + 1 end
                     end
-                    if missing > 0 then
-                        btn:Show()
-                        btn.tooltipText = "Group "..i..": "..label
-                        btn.assignmentState = state
-                        local txt = getglobal(btn:GetName().."Text")
-                        local icon = getglobal(btn:GetName().."Icon")
-                        txt:SetText((total-missing).."/"..total)
-                        txt:SetTextColor(1,0,0)
-                        if state == 1 and self.BuffIconsGroup[typeIdx] then
-                            icon:SetTexture(self.BuffIconsGroup[typeIdx])
-                        else
-                            icon:SetTexture(self.BuffIcons[typeIdx])
-                        end
-                        return true
-                    else
-                        btn:Hide()
-                    end
-                else
-                    btn:Hide()
                 end
-                return false
+                if missing > 0 then
+                    btnMotW:Show()
+                    btnMotW.tooltipText = "Group "..i..": Mark of the Wild\nLeft-click: Gift (group)\nRight-click: Mark (single)"
+                    local txt = getglobal(btnMotW:GetName().."Text")
+                    local icon = getglobal(btnMotW:GetName().."Icon")
+                    txt:SetText((total-missing).."/"..total)
+                    txt:SetTextColor(1,0,0)
+                    icon:SetTexture(self.BuffIcons[0])
+                    showRow = true
+                else
+                    btnMotW:Hide()
+                end
             end
-            
-            local f1 = UpdateHUD(getglobal(row:GetName().."MotW"), motwS, 0, "hasMotW", "Mark of the Wild")
-            showRow = f1
         end
         
         if showRow then
@@ -1230,52 +1215,45 @@ function Druid:UpdateGroupButtons(rowIndex, druidName)
     
     for g = 1, 8 do
         local val = assigns[g] or 0
-        local motwState = math.mod(val, 4)
         
         local prefix = "CPDruidRow"..rowIndex.."Group"..g
         
-        local function UpdateBtn(suffix, state, typeIdx, buffKey)
-            local btn = getglobal(prefix..suffix)
-            if not btn then return end
-            local icon = getglobal(btn:GetName().."Icon")
-            local text = getglobal(btn:GetName().."Text")
+        local btn = getglobal(prefix.."MotW")
+        if not btn then return end
+        local icon = getglobal(btn:GetName().."Icon")
+        local text = getglobal(btn:GetName().."Text")
+        
+        if val > 0 then
+            -- Assigned - show the icon
+            icon:SetTexture(self.BuffIcons[0])
+            icon:Show()
+            btn:SetAlpha(1.0)
             
-            if state > 0 then
-                if state == 1 and self.BuffIconsGroup[typeIdx] then
-                    icon:SetTexture(self.BuffIconsGroup[typeIdx])
-                else
-                    icon:SetTexture(self.BuffIcons[typeIdx])
+            local missing = 0
+            local total = 0
+            if self.CurrentBuffs[g] then
+                for _, m in self.CurrentBuffs[g] do
+                    total = total + 1
+                    if not m.hasMotW and not m.dead then missing = missing + 1 end
                 end
-                icon:Show()
-                btn:SetAlpha(1.0)
-                
-                local missing = 0
-                local total = 0
-                if self.CurrentBuffs[g] then
-                    for _, m in self.CurrentBuffs[g] do
-                        total = total + 1
-                        if not m[buffKey] and not m.dead then missing = missing + 1 end
-                    end
-                end
-                
-                if total > 0 then
-                    text:SetText((total-missing).."/"..total)
-                    if missing > 0 then
-                        text:SetTextColor(1, 0, 0)
-                    else
-                        text:SetTextColor(0, 1, 0)
-                    end
+            end
+            
+            if total > 0 then
+                text:SetText((total-missing).."/"..total)
+                if missing > 0 then
+                    text:SetTextColor(1, 0, 0)
                 else
-                    text:SetText("")
+                    text:SetTextColor(0, 1, 0)
                 end
             else
-                icon:Hide()
                 text:SetText("")
-                btn:SetAlpha(0.3)
             end
+        else
+            -- Not assigned
+            icon:Hide()
+            text:SetText("")
+            btn:SetAlpha(0.3)
         end
-        
-        UpdateBtn("MotW", motwState, 0, "hasMotW")
     end
 end
 
@@ -1440,29 +1418,17 @@ function Druid:BuffButton_OnClick(btn)
         local gid = i
         local assigns = self.Assignments[pname]
         local val = assigns and assigns[gid] or 0
-        local motwState = math.mod(val, 4)
         
-        -- Determine spell based on assignment state and click type
-        -- State 1 = Group (Gift), State 2 = Single (Mark)
-        -- Left-click uses assigned type, Right-click uses opposite
+        if val == 0 then return end  -- Not assigned to this group
+        
+        -- Left-click = Gift of the Wild (group), Right-click = Mark of the Wild (single)
         local isRightClick = (arg1 == "RightButton")
-        local spellName = nil
-        local buffKey = "hasMotW"
+        local spellName = isRightClick and self.Spells.MOTW or self.Spells.GOTW
         
-        if suffix == "MotW" then
-            if motwState == 1 then
-                -- Assigned as Group buff
-                spellName = isRightClick and self.Spells.MOTW or self.Spells.GOTW
-            else
-                -- Assigned as Single buff (or right-click override)
-                spellName = isRightClick and self.Spells.GOTW or self.Spells.MOTW
-            end
-        end
-        
-        if spellName and self.CurrentBuffs[gid] then
+        if self.CurrentBuffs[gid] then
             -- Find first valid target missing the buff
             for _, member in self.CurrentBuffs[gid] do
-                if member.visible and not member.dead and not member[buffKey] then
+                if member.visible and not member.dead and not member.hasMotW then
                     ClearTarget()
                     TargetByName(member.name, true)
                     if UnitExists("target") and UnitName("target") == member.name then
@@ -1531,12 +1497,13 @@ function Druid:SubButton_OnClick(btn)
     self.Assignments[druidName] = self.Assignments[druidName] or {}
     local cur = self.Assignments[druidName][grpIdx] or 0
     
-    local motw = math.mod(cur, 4)
+    -- Simple toggle: 0 = off, 1 = assigned
+    if cur == 0 then
+        cur = 1
+    else
+        cur = 0
+    end
     
-    -- Click cycles: Off -> Gift (Group) -> Mark (Single) -> Off
-    motw = math.mod(motw + 1, 3)
-    
-    cur = motw
     self.Assignments[druidName][grpIdx] = cur
     ClassPower_SendMessage("DASSIGN "..druidName.." "..grpIdx.." "..cur)
     self:UpdateConfigGrid()
@@ -1546,8 +1513,11 @@ end
 function Druid:SubButton_OnEnter(btn)
     GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
     GameTooltip:SetText("Mark of the Wild")
-    GameTooltip:AddLine("Click to cycle:", 1, 1, 1)
-    GameTooltip:AddLine("Off -> Gift (Group) -> Mark (Single)", 0.7, 0.7, 0.7)
+    GameTooltip:AddLine("Click to toggle assignment", 1, 1, 1)
+    GameTooltip:AddLine(" ", 1, 1, 1)
+    GameTooltip:AddLine("On HUD:", 1, 0.8, 0)
+    GameTooltip:AddLine("Left-click: Gift of the Wild (group)", 0.7, 0.7, 0.7)
+    GameTooltip:AddLine("Right-click: Mark of the Wild (single)", 0.7, 0.7, 0.7)
     GameTooltip:Show()
 end
 
