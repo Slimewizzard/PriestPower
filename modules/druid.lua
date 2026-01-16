@@ -658,7 +658,19 @@ function Druid:CreateBuffBar()
     end)
     f:SetScript("OnMouseUp", function()
         this:StopMovingOrSizing()
-        Druid:SaveBuffBarPosition()
+        if arg1 == "RightButton" then
+            -- Right-click opens config
+            if Druid.ConfigWindow then
+                if Druid.ConfigWindow:IsVisible() then
+                    Druid.ConfigWindow:Hide()
+                else
+                    Druid.ConfigWindow:Show()
+                    Druid:UpdateConfigGrid()
+                end
+            end
+        else
+            Druid:SaveBuffBarPosition()
+        end
     end)
     
     local grip = CP_CreateResizeGrip(f, f:GetName().."ResizeGrip")

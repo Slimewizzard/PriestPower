@@ -923,7 +923,19 @@ function Paladin:CreateBuffBar()
     end)
     f:SetScript("OnMouseUp", function()
         this:StopMovingOrSizing()
-        Paladin:SaveBuffBarPosition()
+        if arg1 == "RightButton" then
+            -- Right-click opens config
+            if Paladin.ConfigWindow then
+                if Paladin.ConfigWindow:IsVisible() then
+                    Paladin.ConfigWindow:Hide()
+                else
+                    Paladin.ConfigWindow:Show()
+                    Paladin:UpdateConfigGrid()
+                end
+            end
+        else
+            Paladin:SaveBuffBarPosition()
+        end
     end)
     
     local grip = CP_CreateResizeGrip(f, f:GetName().."ResizeGrip")
