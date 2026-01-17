@@ -1321,7 +1321,13 @@ function Priest:BuffButton_OnClick(btn)
                             self:ScanRaid()
                             self:UpdateBuffBar()
                             return
+                        else
+                            -- Out of range, restore target and try next person
+                            TargetLastTarget()
                         end
+                    else
+                        -- Couldn't target, restore and try next person
+                        TargetLastTarget()
                     end
                 end
             end
