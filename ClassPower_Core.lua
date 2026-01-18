@@ -5,6 +5,7 @@
 ClassPower = {}
 ClassPower.modules = {}
 ClassPower.activeModule = nil
+ClassPower.loadedModules = {}  -- Track which modules have been initialized (lazy load)
 ClassPower.version = "2.0"
 
 -- Saved Variables (Renamed from PriestPower)
@@ -56,6 +57,7 @@ function ClassPower:LoadActiveModule()
         if self.activeModule.OnLoad then
             self.activeModule:OnLoad()
         end
+        self.loadedModules[class] = true  -- Mark as loaded
         
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r "..self.version.." loaded for |cffffffff"..class.."|r.")
         return true
@@ -63,6 +65,66 @@ function ClassPower:LoadActiveModule()
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r "..self.version.." loaded. |cffff6600"..class.." module not yet implemented.|r")
         return false
     end
+end
+
+-- Lazy load a module (only called when needed)
+function ClassPower:EnsureModuleLoaded(classToken)
+    if self.loadedModules[classToken] then return true end
+    
+    local module = self.modules[classToken]
+    if not module then return false end
+    
+    if module.OnLoad then
+        CP_Debug("Lazy loading module: "..classToken)
+        module:OnLoad()
+    end
+    self.loadedModules[classToken] = true
+    return true
+end
+
+-- Switch to viewing a different module's config (for leaders/assists)
+function ClassPower:SwitchViewModule(classToken)
+    if not ClassPower_IsPromoted() and classToken ~= self.playerClass then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Requires leader/assist to view other classes.")
+        return
+    end
+    
+    -- Lazy load the module if not yet initialized
+    if not self:EnsureModuleLoaded(classToken) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: "..classToken.." module not available.")
+        return
+    end
+    
+    -- Hide all other config windows
+    for token, mod in pairs(self.modules) do
+        if mod.ConfigWindow and mod.ConfigWindow:IsVisible() then
+            mod.ConfigWindow:Hide()
+        end
+    end
+    
+    -- Show target module's config
+    local module = self.modules[classToken]
+    if module.ShowConfig then
+        module:ShowConfig()
+    elseif module.ConfigWindow then
+        module.ConfigWindow:Show()
+        if module.UpdateConfigGrid then
+            module:UpdateConfigGrid()
+        end
+    end
+    
+    -- Hide admin window if open
+    if self.AdminWindow and self.AdminWindow:IsVisible() then
+        self.AdminWindow:Hide()
+    end
+end
+
+-- Show the admin window (for leaders/assists)
+function ClassPower:ShowAdminWindow()
+    if not self.AdminWindow then
+        self:CreateAdminWindow()
+    end
+    self.AdminWindow:Show()
 end
 
 -----------------------------------------------------------------------------------
@@ -264,6 +326,18 @@ function ClassPower_SlashHandler(msg)
     elseif msg == "reset" then
         CP_PerUser = {}
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r Settings reset.")
+    elseif msg == "admin" then
+        if ClassPower_IsPromoted() then
+            ClassPower:ShowAdminWindow()
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Admin requires leader/assist.")
+        end
+    elseif msg == "priest" then
+        ClassPower:SwitchViewModule("PRIEST")
+    elseif msg == "paladin" then
+        ClassPower:SwitchViewModule("PALADIN")
+    elseif msg == "druid" then
+        ClassPower:SwitchViewModule("DRUID")
     else
         -- Pass to active module
         if ClassPower.activeModule and ClassPower.activeModule.OnSlashCommand then
@@ -293,9 +367,14 @@ function ClassPower_OnEvent(event)
         
     elseif event == "CHAT_MSG_ADDON" then
         if arg1 == CP_PREFIX then
-            -- Pass to active module
-            if ClassPower.activeModule and ClassPower.activeModule.OnAddonMessage then
-                ClassPower.activeModule:OnAddonMessage(arg4, arg2)
+            -- Route to ALL loaded modules (for cross-class admin feature)
+            for classToken, loaded in pairs(ClassPower.loadedModules) do
+                if loaded then
+                    local module = ClassPower.modules[classToken]
+                    if module and module.OnAddonMessage then
+                        module:OnAddonMessage(arg4, arg2)
+                    end
+                end
             end
         end
     else
@@ -339,6 +418,101 @@ SLASH_CLASSPOWER5 = "/priestpower"
 -- Create dropdown frame for menus
 if not getglobal("ClassPowerDropDown") then
     CreateFrame("Frame", "ClassPowerDropDown", UIParent, "UIDropDownMenuTemplate")
+end
+
+-----------------------------------------------------------------------------------
+-- Admin Window (for leaders/assists to view all class modules)
+-----------------------------------------------------------------------------------
+
+function ClassPower:CreateAdminWindow()
+    if self.AdminWindow then return end
+    
+    local f = CreateFrame("Frame", "ClassPowerAdminWindow", UIParent)
+    f:SetWidth(280)
+    f:SetHeight(140)
+    f:SetPoint("CENTER", 0, 100)
+    f:SetBackdrop({
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = { left = 11, right = 12, top = 12, bottom = 11 }
+    })
+    f:SetFrameStrata("HIGH")
+    f:SetToplevel(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:SetClampedToScreen(true)
+    
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", f, "TOP", 0, -20)
+    title:SetText("ClassPower Admin")
+    
+    local subtitle = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    subtitle:SetPoint("TOP", title, "BOTTOM", 0, -4)
+    subtitle:SetText("Select a class module to configure")
+    
+    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -5, -5)
+    
+    f:SetScript("OnMouseDown", function()
+        if arg1 == "LeftButton" then this:StartMoving() end
+    end)
+    f:SetScript("OnMouseUp", function() this:StopMovingOrSizing() end)
+    
+    -- Class buttons
+    local classes = {
+        {token = "PRIEST", label = "Priests", icon = "Interface\\Icons\\Spell_Holy_WordFortitude"},
+        {token = "DRUID", label = "Druids", icon = "Interface\\Icons\\Spell_Nature_Regeneration"},
+        {token = "PALADIN", label = "Paladins", icon = "Interface\\Icons\\Spell_Holy_SealOfWisdom"},
+    }
+    
+    local buttonWidth = 70
+    local buttonHeight = 50
+    local startX = 30
+    
+    for i, class in ipairs(classes) do
+        local btn = CreateFrame("Button", f:GetName()..class.token, f)
+        btn:SetWidth(buttonWidth)
+        btn:SetHeight(buttonHeight)
+        btn:SetPoint("TOPLEFT", f, "TOPLEFT", startX + (i-1) * (buttonWidth + 10), -60)
+        
+        -- Background
+        local bg = btn:CreateTexture(btn:GetName().."Bg", "BACKGROUND")
+        bg:SetAllPoints(btn)
+        bg:SetTexture(0.1, 0.1, 0.1, 0.7)
+        
+        -- Icon
+        local icon = btn:CreateTexture(btn:GetName().."Icon", "ARTWORK")
+        icon:SetWidth(32)
+        icon:SetHeight(32)
+        icon:SetPoint("TOP", btn, "TOP", 0, -4)
+        icon:SetTexture(class.icon)
+        
+        -- Label
+        local label = btn:CreateFontString(btn:GetName().."Label", "OVERLAY", "GameFontNormalSmall")
+        label:SetPoint("BOTTOM", btn, "BOTTOM", 0, 4)
+        label:SetText(class.label)
+        
+        -- Highlight
+        btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
+        local ht = btn:GetHighlightTexture()
+        if ht then ht:SetBlendMode("ADD") end
+        
+        btn.classToken = class.token
+        btn:SetScript("OnClick", function()
+            ClassPower:SwitchViewModule(this.classToken)
+        end)
+        
+        btn:SetScript("OnEnter", function()
+            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Open "..class.label.." Configuration")
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+    
+    f:Hide()
+    self.AdminWindow = f
 end
 
 -----------------------------------------------------------------------------------
