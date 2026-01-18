@@ -37,11 +37,14 @@ Druid.BUFF_THORNS = 1
 -- Buff durations in seconds (for timer calculations)
 -- Using Gift of the Wild duration (60 min) since that's what's typically cast in groups
 Druid.BuffDurations = {
-    MotW = 3600,      -- 60 minutes (using GotW duration for group estimation)
-    GotW = 3600,      -- 1 hour for group
+    MotW = 1800,      -- 30 minutes (Mark)
+    GotW = 3600,      -- 60 minutes (Gift)
     Thorns = 600,     -- 10 minutes
     Emerald = 1800,   -- 30 minutes (estimate)
 }
+-- Tooltip scanner for distinguishing Mark vs Gift
+local scanTooltip = CreateFrame("GameTooltip", "ClassPowerDruidScanTooltip", nil, "GameTooltipTemplate")
+scanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
 
 -----------------------------------------------------------------------------------
 -- State
@@ -403,9 +406,18 @@ function Druid:ScanRaid()
                 -- Mark of the Wild & Gift of the Wild both use: Spell_Nature_Regeneration
                 if string.find(buffTexture, "regeneration") then 
                     buffInfo.hasMotW = true
-                    -- Track when we first saw this buff
-                    if not self.BuffTimestamps[name].MotW then
+                    
+                    -- Check Tooltip for "Gift of the Wild" vs "Mark of the Wild"
+                    scanTooltip:SetUnitBuff(unit, b)
+                    local tipText = ClassPowerDruidScanTooltipTextLeft1:GetText()
+                    local isGift = (tipText == "Gift of the Wild")
+                    
+                    if not self.BuffTimestamps[name] then self.BuffTimestamps[name] = {} end
+                    
+                    -- Update timestamp if new or type changed
+                    if not self.BuffTimestamps[name].MotW or self.BuffTimestamps[name].isGift ~= isGift then
                         self.BuffTimestamps[name].MotW = GetTime()
+                        self.BuffTimestamps[name].isGift = isGift
                     end
                 end
                 
@@ -428,10 +440,12 @@ function Druid:ScanRaid()
                 b = b + 1
             end
             
-            -- Clear timestamps for buffs that are no longer present
-            if not buffInfo.hasMotW then self.BuffTimestamps[name].MotW = nil end
-            if not buffInfo.hasThorns then self.BuffTimestamps[name].Thorns = nil end
-            if not buffInfo.hasEmerald then self.BuffTimestamps[name].Emerald = nil end
+            -- Clear timestamps for buffs that are no longer present (only if visible)
+            if UnitIsVisible(unit) then
+                if not buffInfo.hasMotW then self.BuffTimestamps[name].MotW = nil end
+                if not buffInfo.hasThorns then self.BuffTimestamps[name].Thorns = nil end
+                if not buffInfo.hasEmerald then self.BuffTimestamps[name].Emerald = nil end
+            end
             
             if not self.CurrentBuffs[subgroup] then self.CurrentBuffs[subgroup] = {} end
             table.insert(self.CurrentBuffs[subgroup], buffInfo)
@@ -598,7 +612,12 @@ function Druid:GetEstimatedTimeRemaining(playerName, buffType)
     if not self.BuffTimestamps[playerName] then return nil end
     if not self.BuffTimestamps[playerName][buffType] then return nil end
     
-    local duration = self.BuffDurations[buffType] or 1800  -- Default 30 min
+    local duration = self.BuffDurations[buffType] or 1800
+    
+    -- Adjust duration for Gift of the Wild (60m) vs Mark (30m)
+    if buffType == "MotW" and self.BuffTimestamps[playerName].isGift then
+        duration = self.BuffDurations.GotW
+    end
     local firstSeen = self.BuffTimestamps[playerName][buffType]
     local elapsed = GetTime() - firstSeen
     local remaining = duration - elapsed
