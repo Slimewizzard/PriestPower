@@ -61,8 +61,73 @@ Priest.CurrentBuffs = {}
 Priest.CurrentBuffsByName = {}
 Priest.Assignments = {}
 Priest.LegacyAssignments = {}
-Priest.BuffTimers = {}
+Priest.BuffTimers = {} -- Legacy, replaced by BuffTimestamps
+Priest.BuffTimestamps = {} -- Stores GetTime() when buffs are first seen
 Priest.RankInfo = {}
+
+-- Estimated durations (seconds)
+Priest.BuffDurations = {
+    Fortitude = 1800,       -- 30 min
+    PrayerFort = 3600,      -- 60 min
+    Spirit = 1800,          -- 30 min
+    PrayerSpirit = 3600,    -- 60 min
+    Shadow = 600,           -- 10 min
+    PrayerShadow = 1200,    -- 20 min
+    Proclaim = 7200,        -- 2 hours
+    Grace = 1800,           -- 30 min
+    Empower = 600,          -- 10 min
+    Revive = 0,             -- Instant
+    Enlighten = 1800,       -- 30 min (guess)
+}
+
+function Priest:GetEstimatedTimeRemaining(playerName, buffType)
+    if not self.BuffTimestamps[playerName] then return nil end
+    local tsData = self.BuffTimestamps[playerName][buffType]
+    if not tsData then return nil end
+    
+    local startTime = 0
+    local isPrayer = false
+    
+    if type(tsData) == "table" then
+        startTime = tsData.start
+        isPrayer = tsData.isPrayer
+    else
+        startTime = tsData
+    end
+    
+    local duration = self.BuffDurations[buffType] or 1800
+    
+    if isPrayer then
+        if buffType == "Fortitude" then duration = self.BuffDurations.PrayerFort end
+        if buffType == "Spirit" then duration = self.BuffDurations.PrayerSpirit end
+        if buffType == "Shadow" then duration = self.BuffDurations.PrayerShadow end
+    end
+    
+    local elapsed = GetTime() - startTime
+    local remaining = duration - elapsed
+    
+    if remaining < 0 then remaining = 0 end
+    return remaining
+end
+
+function Priest:GetGroupMinTimeRemaining(groupId, buffType)
+    local minTime = nil
+    
+    if not self.CurrentBuffs[groupId] then return nil end
+    
+    for _, member in self.CurrentBuffs[groupId] do
+        if not member.dead then
+            local remaining = self:GetEstimatedTimeRemaining(member.name, buffType)
+            if remaining then
+                if not minTime or remaining < minTime then
+                    minTime = remaining
+                end
+            end
+        end
+    end
+    
+    return minTime
+end
 
 -- Timers
 Priest.UpdateTimer = 0
@@ -172,10 +237,15 @@ function Priest:OnUpdate(elapsed)
         end
     end
     
-    -- UI refresh (5s interval - buffs don't change that fast)
+    -- UI refresh (1s interval if timers shown, else 5s)
     self.UpdateTimer = self.UpdateTimer - elapsed
     if self.UpdateTimer <= 0 then
-        self.UpdateTimer = 5.0
+        local displayMode = CP_PerUser.BuffDisplayMode
+        if displayMode == "always" or displayMode == "timer" then
+            self.UpdateTimer = 1.0
+        else
+            self.UpdateTimer = 5.0
+        end
         
         -- Only scan and update if UI is visible
         local needsScan = false
@@ -362,17 +432,75 @@ function Priest:ScanRaid()
                 
                 bname = string.lower(bname)
                 
-                if string.find(bname, "fortitude") then buffInfo.hasFort = true end
-                if string.find(bname, "spirit") or string.find(bname, "inspiration") then buffInfo.hasSpirit = true end
-                if string.find(bname, "shadow") and (string.find(bname, "protection") or string.find(bname, "antishadow")) then
+                -- Fortitude
+                if string.find(bname, "wordfortitude") then 
+                    buffInfo.hasFort = true
+                    buffInfo.isPrayerFort = false 
+                elseif string.find(bname, "prayeroffortitude") then 
+                    buffInfo.hasFort = true 
+                    buffInfo.isPrayerFort = true 
+                end
+                
+                -- Spirit
+                if string.find(bname, "divinespirit") then 
+                    buffInfo.hasSpirit = true
+                    buffInfo.isPrayerSpirit = false
+                elseif string.find(bname, "prayerofspirit") then 
+                    buffInfo.hasSpirit = true
+                    buffInfo.isPrayerSpirit = true 
+                elseif string.find(bname, "inspiration") then
+                     buffInfo.hasSpirit = true -- Legacy behavior? Or maybe mistake? Keeping safe.
+                end
+
+                -- Shadow Protection
+                if string.find(bname, "antishadow") then
+                    buffInfo.hasShadow = true
+                    buffInfo.isPrayerShadow = false
+                elseif string.find(bname, "prayerofshadowprotection") then
+                    buffInfo.hasShadow = true
+                    buffInfo.isPrayerShadow = true
+                elseif string.find(bname, "shadow") and string.find(bname, "protection") then
+                    -- Fallback for weird naming?
                     buffInfo.hasShadow = true
                 end
+                
                 if string.find(bname, "proclaimchampion") or string.find(bname, "holychampion") then buffInfo.hasProclaim = true end
                 if string.find(bname, "championsgrace") then buffInfo.hasGrace = true end
                 if string.find(bname, "empowerchampion") then buffInfo.hasEmpower = true end
                 if string.find(bname, "btnholyscriptures") or string.find(bname, "enlighten") then buffInfo.hasEnlighten = true end
                 
                 b = b + 1
+            end
+            
+            -- Update timestamps
+            if not self.BuffTimestamps[name] then self.BuffTimestamps[name] = {} end
+            local ts = self.BuffTimestamps[name]
+            
+            local function UpdateTS(key, hasBuff, isPrayer)
+                if hasBuff then
+                    local now = GetTime()
+                    if not ts[key] then 
+                        ts[key] = { start = now, isPrayer = isPrayer }
+                    elseif type(ts[key]) == "number" then
+                        -- Convert legacy number to table
+                        ts[key] = { start = ts[key], isPrayer = isPrayer }
+                    elseif ts[key].isPrayer ~= isPrayer then
+                        -- Type changed (Single <-> Prayer), reset time
+                        ts[key] = { start = now, isPrayer = isPrayer }
+                    end
+                else
+                    ts[key] = nil
+                end
+            end
+            
+            if UnitIsVisible(unit) then
+                UpdateTS("Fortitude", buffInfo.hasFort, buffInfo.isPrayerFort)
+                UpdateTS("Spirit", buffInfo.hasSpirit, buffInfo.isPrayerSpirit)
+                UpdateTS("Shadow", buffInfo.hasShadow, buffInfo.isPrayerShadow)
+                UpdateTS("Proclaim", buffInfo.hasProclaim)
+                UpdateTS("Grace", buffInfo.hasGrace)
+                UpdateTS("Empower", buffInfo.hasEmpower)
+                UpdateTS("Enlighten", buffInfo.hasEnlighten)
             end
             
             if not self.CurrentBuffs[subgroup] then self.CurrentBuffs[subgroup] = {} end
@@ -633,11 +761,11 @@ function Priest:CreateHUDRow(parent, name, id)
         fort:SetScript("OnClick", function() Priest:BuffButton_OnClick(this) end)
         
         local spirit = CP_CreateHUDButton(f, name.."Spirit")
-        spirit:SetPoint("LEFT", fort, "RIGHT", 2, 0)
+        spirit:SetPoint("LEFT", fort, "RIGHT", 50, 0)
         spirit:SetScript("OnClick", function() Priest:BuffButton_OnClick(this) end)
         
         local shadow = CP_CreateHUDButton(f, name.."Shadow")
-        shadow:SetPoint("LEFT", spirit, "RIGHT", 2, 0)
+        shadow:SetPoint("LEFT", spirit, "RIGHT", 50, 0)
         shadow:SetScript("OnClick", function() Priest:BuffButton_OnClick(this) end)
     end
     
@@ -648,21 +776,19 @@ function Priest:CreateHUDRow(parent, name, id)
         proc:SetScript("OnClick", function() Priest:BuffButton_OnClick(this) end)
         
         local grace = CP_CreateHUDButton(f, name.."Grace")
-        grace:SetPoint("LEFT", proc, "RIGHT", 2, 0)
+        grace:SetPoint("LEFT", proc, "RIGHT", 50, 0)
         getglobal(grace:GetName().."Icon"):SetTexture(self.ChampionIcons["Grace"])
         grace:SetScript("OnClick", function() Priest:BuffButton_OnClick(this) end)
         
         local emp = CP_CreateHUDButton(f, name.."Empower")
-        emp:SetPoint("LEFT", grace, "RIGHT", 2, 0)
+        emp:SetPoint("LEFT", grace, "RIGHT", 50, 0)
         getglobal(emp:GetName().."Icon"):SetTexture(self.ChampionIcons["Empower"])
         emp:SetScript("OnClick", function() Priest:BuffButton_OnClick(this) end)
         
         local rev = CP_CreateHUDButton(f, name.."Revive")
-        rev:SetPoint("LEFT", emp, "RIGHT", 2, 0)
+        rev:SetPoint("LEFT", emp, "RIGHT", 50, 0)
         getglobal(rev:GetName().."Icon"):SetTexture(self.ChampionIcons["Revive"])
         rev:SetScript("OnClick", function() Priest:BuffButton_OnClick(this) end)
-        
-        f:SetWidth(180)
     end
     
     if id == 10 then
@@ -692,105 +818,189 @@ function Priest:UpdateBuffBar()
     local pname = UnitName("player")
     local assigns = self.Assignments[pname]
     
+    local maxRowWidth = 145 -- Minimum width
     local lastRow = nil
-    local count = 0
+    
+    local displayMode = CP_PerUser.BuffDisplayMode or "missing"
+    local thresholdSeconds = ((CP_PerUser.TimerThresholdMinutes or 5) * 60) + (CP_PerUser.TimerThresholdSeconds or 0)
+    
+    local ROW_BASE_X = {40, 108, 176, 244} -- X positions for buttons 1, 2, 3, 4
     
     for i = 1, 10 do
         local row = getglobal("ClassPowerHUDRow"..i)
         if not row then break end
         
         local showRow = false
+        local currentRowWidth = 0
+        
+        -- Helper to check buttons
+        local function CheckButton(btn, idx, missingCount, totalCount, minTime, label)
+            if not btn then return false end
+            
+            local shouldShow = false
+            if displayMode == "always" then
+                shouldShow = (totalCount > 0)
+            elseif displayMode == "timer" then
+                if missingCount > 0 then
+                    shouldShow = true
+                elseif minTime and minTime <= thresholdSeconds then
+                    shouldShow = true
+                end
+            else -- missing
+                shouldShow = (totalCount > 0 and missingCount > 0)
+            end
+            
+            if shouldShow then
+                btn:Show()
+                local txt = getglobal(btn:GetName().."Text")
+                local icon = getglobal(btn:GetName().."Icon")
+                
+                -- Display format
+                if displayMode == "always" or displayMode == "timer" then
+                    if minTime and minTime > 0 and missingCount == 0 then
+                         txt:SetText(CP_FormatTime(minTime))
+                         txt:SetTextColor(0, 1, 0)
+                    elseif missingCount > 0 then
+                        if minTime and minTime > 0 then
+                            txt:SetText(missingCount.." ("..CP_FormatTime(minTime)..")")
+                        else
+                             txt:SetText(missingCount.."/"..totalCount) -- Shortened for space
+                        end
+                        txt:SetTextColor(1, 0, 0)
+                    else
+                         txt:SetText(totalCount.."/"..totalCount)
+                         txt:SetTextColor(0, 1, 0)
+                    end
+                else
+                    txt:SetText((totalCount-missingCount).."/"..totalCount)
+                    txt:SetTextColor(1, 0, 0)
+                end
+                
+                local btnWidth = ROW_BASE_X[idx] + 25 + txt:GetStringWidth()
+                if btnWidth > currentRowWidth then currentRowWidth = btnWidth end
+                return true
+            else
+                btn:Hide()
+                return false
+            end
+        end
         
         if i == 9 then
+            -- Champion Row
             local target = self.LegacyAssignments[pname] and self.LegacyAssignments[pname]["Champ"]
             if target then
                 local status = self.CurrentBuffsByName[target]
-                local btnP = getglobal(row:GetName().."Proclaim")
-                local btnG = getglobal(row:GetName().."Grace")
-                local btnE = getglobal(row:GetName().."Empower")
-                local btnR = getglobal(row:GetName().."Revive")
                 
-                if status and status.dead then
-                    btnP:Hide(); btnG:Hide(); btnE:Hide(); btnR:Show()
-                    btnR.tooltipText = "Champion: "..target.." (DEAD)"
-                    showRow = true
+                -- Dead check
+                local isDead = (status and status.dead)
+                local btnR = getglobal(row:GetName().."Revive")
+                if isDead then
+                     btnR:Show()
+                     btnR.tooltipText = "Champion: "..target.." (DEAD)"
+                     currentRowWidth = ROW_BASE_X[4] + 25
+                     showRow = true
                 else
-                    btnR:Hide()
-                    if not status or not status.hasProclaim then
-                        btnP:Show()
-                        btnP.tooltipText = "Proclaim: "..target
-                        getglobal(btnP:GetName().."Text"):SetText("0/1")
-                        getglobal(btnP:GetName().."Text"):SetTextColor(1,0,0)
-                        showRow = true
-                    else
-                        btnP:Hide()
-                    end
-                    if status and (status.hasGrace or status.hasEmpower) then
-                        btnG:Hide(); btnE:Hide()
-                    else
-                        btnG:Show(); btnE:Show()
-                        btnG.tooltipText = "Grace: "..target
-                        btnE.tooltipText = "Empower: "..target
-                        showRow = true
-                    end
+                     btnR:Hide()
+                     
+                     -- Proclaim (Btn 1)
+                     local hasProclaim = status and status.hasProclaim
+                     local timeProclaim = self:GetEstimatedTimeRemaining(target, "Proclaim")
+                     local btnP = getglobal(row:GetName().."Proclaim")
+                     local showP = CheckButton(btnP, 1, hasProclaim and 0 or 1, 1, timeProclaim, "Proclaim")
+                     if showP then btnP.tooltipText = "Proclaim: "..target end
+                     
+                     -- Grace (Btn 2)
+                     local hasGrace = status and status.hasGrace
+                     local timeGrace = self:GetEstimatedTimeRemaining(target, "Grace")
+                     local btnG = getglobal(row:GetName().."Grace")
+                     local showG = CheckButton(btnG, 2, hasGrace and 0 or 1, 1, timeGrace, "Grace")
+                     if showG then btnG.tooltipText = "Grace: "..target end
+                     
+                     -- Empower (Btn 3)
+                     local hasEmpower = status and status.hasEmpower
+                     local timeEmpower = self:GetEstimatedTimeRemaining(target, "Empower")
+                     local btnE = getglobal(row:GetName().."Empower")
+                     local showE = CheckButton(btnE, 3, hasEmpower and 0 or 1, 1, timeEmpower, "Empower")
+                     if showE then btnE.tooltipText = "Empower: "..target end
+                     
+                     showRow = showP or showG or showE
                 end
             end
+            
         elseif i == 10 then
+            -- Enlighten Row (Btn 1)
             local target = self.LegacyAssignments[pname] and self.LegacyAssignments[pname]["Enlighten"]
             if target then
                 local status = self.CurrentBuffsByName[target]
+                local hasEnlighten = status and status.hasEnlighten
+                local timeEnlighten = self:GetEstimatedTimeRemaining(target, "Enlighten")
                 local btnEn = getglobal(row:GetName().."Enlighten")
-                if not status or not status.hasEnlighten then
-                    btnEn:Show()
-                    btnEn.tooltipText = "Enlighten: "..target
-                    getglobal(btnEn:GetName().."Text"):SetText("0/1")
-                    getglobal(btnEn:GetName().."Text"):SetTextColor(1,0,0)
-                    showRow = true
-                else
-                    btnEn:Hide()
-                end
+                
+                showRow = CheckButton(btnEn, 1, hasEnlighten and 0 or 1, 1, timeEnlighten, "Enlighten")
+                if showRow then btnEn.tooltipText = "Enlighten: "..target end
             end
+            
         elseif assigns and assigns[i] and assigns[i] > 0 then
+            -- Group Rows
             local val = assigns[i]
-            -- Decode states - any non-zero means assigned
             local fS = math.mod(val, 4)
             local sS = math.mod(math.floor(val/4), 4)
             local shS = math.mod(math.floor(val/16), 4)
             
-            local function UpdateHUD(btn, state, typeIdx, buffKey, label)
-                if not btn then return false end
-                if state > 0 then
-                    local missing = 0
-                    local total = 0
-                    if self.CurrentBuffs[i] then
-                        for _, m in self.CurrentBuffs[i] do
-                            total = total + 1
-                            if not m[buffKey] and not m.dead then missing = missing + 1 end
-                        end
-                    end
-                    if missing > 0 then
-                        btn:Show()
-                        btn.tooltipText = "Group "..i..": "..label.."\nLeft-click: Prayer (group)\nRight-click: Single target"
-                        local txt = getglobal(btn:GetName().."Text")
-                        local icon = getglobal(btn:GetName().."Icon")
-                        txt:SetText((total-missing).."/"..total)
-                        txt:SetTextColor(1,0,0)
-                        -- Always show group icon
-                        icon:SetTexture(self.BuffIconsGroup[typeIdx])
-                        return true
-                    else
-                        btn:Hide()
-                    end
-                else
-                    btn:Hide()
-                end
-                return false
+            local function GetStats(buffKey, buffType)
+                 local missing = 0
+                 local total = 0
+                 if self.CurrentBuffs[i] then
+                     for _, m in self.CurrentBuffs[i] do
+                         total = total + 1
+                         if not m[buffKey] and not m.dead then missing = missing + 1 end
+                     end
+                 end
+                 local minTime = self:GetGroupMinTimeRemaining(i, buffType)
+                 return missing, total, minTime
             end
             
-            local f1 = UpdateHUD(getglobal(row:GetName().."Fort"), fS, 0, "hasFort", "Fortitude")
-            local f2 = UpdateHUD(getglobal(row:GetName().."Spirit"), sS, 1, "hasSpirit", "Spirit")
-            local f3 = UpdateHUD(getglobal(row:GetName().."Shadow"), shS, 2, "hasShadow", "Shadow")
-            showRow = f1 or f2 or f3
+            -- Fort (Btn 1)
+            if fS > 0 then
+                local missing, total, minTime = GetStats("hasFort", "Fortitude")
+                local btn = getglobal(row:GetName().."Fort")
+                if CheckButton(btn, 1, missing, total, minTime, "Fortitude") then
+                    showRow = true
+                    btn.tooltipText = "Group "..i..": Fortitude"
+                    local icon = getglobal(btn:GetName().."Icon")
+                    icon:SetTexture(self.BuffIconsGroup[0])
+                end
+            else
+                getglobal(row:GetName().."Fort"):Hide()
+            end
+            
+            -- Spirit (Btn 2)
+            if sS > 0 then
+                local missing, total, minTime = GetStats("hasSpirit", "Spirit")
+                local btn = getglobal(row:GetName().."Spirit")
+                if CheckButton(btn, 2, missing, total, minTime, "Spirit") then
+                    showRow = true
+                    btn.tooltipText = "Group "..i..": Spirit"
+                    local icon = getglobal(btn:GetName().."Icon")
+                    icon:SetTexture(self.BuffIconsGroup[1])
+                end
+            else
+                 getglobal(row:GetName().."Spirit"):Hide()
+            end
+            
+            -- Shadow (Btn 3)
+            if shS > 0 then
+                local missing, total, minTime = GetStats("hasShadow", "Shadow")
+                local btn = getglobal(row:GetName().."Shadow")
+                if CheckButton(btn, 3, missing, total, minTime, "Shadow") then
+                    showRow = true
+                    btn.tooltipText = "Group "..i..": Shadow"
+                    local icon = getglobal(btn:GetName().."Icon")
+                    icon:SetTexture(self.BuffIconsGroup[2])
+                end
+             else
+                 getglobal(row:GetName().."Shadow"):Hide()
+             end
         end
         
         if showRow then
@@ -799,18 +1009,27 @@ function Priest:UpdateBuffBar()
             if lastRow then
                 row:SetPoint("TOPLEFT", lastRow, "BOTTOMLEFT", 0, 0)
             else
-                row:SetPoint("TOPLEFT", f, "TOPLEFT", 5, -20)
+                row:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -20)
             end
             lastRow = row
-            count = count + 1
+            if currentRowWidth > maxRowWidth then maxRowWidth = currentRowWidth end
         else
             row:Hide()
         end
     end
     
-    local newHeight = 25 + (count * 34)
-    if newHeight < 40 then newHeight = 40 end
-    f:SetHeight(newHeight)
+    -- Optimize size updates
+    local newHeight = 25
+    if lastRow then
+        newHeight = (lastRow:GetBottom() and (f:GetTop() - lastRow:GetBottom()) or 40) + 5
+    end
+    
+    if math.abs(f:GetWidth() - maxRowWidth) > 1 then
+        f:SetWidth(maxRowWidth)
+    end
+    if math.abs(f:GetHeight() - newHeight) > 1 then
+        f:SetHeight(newHeight)
+    end
 end
 
 -----------------------------------------------------------------------------------
@@ -915,6 +1134,17 @@ function Priest:CreateConfigWindow()
     else
         f:SetScale(1.0)
     end
+    
+    -- Add Settings button
+    local btnSettings = CreateFrame("Button", "CPPriestSettingsBtn", f, "UIPanelButtonTemplate")
+    btnSettings:SetWidth(100)
+    btnSettings:SetHeight(24)
+    btnSettings:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 15)
+    btnSettings:SetText("Settings...")
+    btnSettings:SetScript("OnClick", function()
+        CP_ShowSettingsPanel()
+    end)
+
     
     f:Hide()
     self.ConfigWindow = f
@@ -1105,8 +1335,8 @@ function Priest:UpdateConfigGrid()
         if row then row:Hide() end
     end
     
-    local newHeight = 80 + (rowIndex - 1) * 46
-    if newHeight < 140 then newHeight = 140 end
+    local newHeight = 80 + (rowIndex - 1) * 46 + 40 -- +40 for Settings button
+    if newHeight < 180 then newHeight = 180 end
     self.ConfigWindow:SetHeight(newHeight)
 end
 
@@ -1330,27 +1560,60 @@ function Priest:BuffButton_OnClick(btn)
         
         if spellName and self.CurrentBuffs[gid] then
             for _, member in self.CurrentBuffs[gid] do
-                if member.visible and not member.dead and not member[buffKey] then
-                    ClearTarget()
-                    TargetByName(member.name, true)
-                    if UnitExists("target") and UnitName("target") == member.name then
-                        if CheckInteractDistance("target", 4) then
-                            CastSpellByName(spellName)
-                            TargetLastTarget()
-                            self:ScanRaid()
-                            self:UpdateBuffBar()
-                            return
+                if member.visible and not member.dead then
+                     -- Logic:
+                     -- Left-click (Group): Cast on ANYONE in range (Refresh)
+                     -- Right-click (Single): Cast on MISSING person (Smart Fill)
+                     
+                     local shouldCast = false
+                     if isRightClick then
+                         if not member[buffKey] then shouldCast = true end
+                     else
+                         shouldCast = true -- Always try to cast group buff if button clicked
+                     end
+                     
+                     if shouldCast then
+                        ClearTarget()
+                        TargetByName(member.name, true)
+                        if UnitExists("target") and UnitName("target") == member.name then
+                            if CheckInteractDistance("target", 4) then
+                                CastSpellByName(spellName)
+                                
+                                -- If group buff, reset timestamps for everyone in group
+                                if not isRightClick then
+                                    local buffNameMap = {
+                                        ["hasFort"] = "Fortitude",
+                                        ["hasSpirit"] = "Spirit",
+                                        ["hasShadow"] = "Shadow"
+                                    }
+                                    local bName = buffNameMap[buffKey]
+                                    if bName then
+                                        for _, m in self.CurrentBuffs[gid] do
+                                            if self.BuffTimestamps[m.name] then
+                                                self.BuffTimestamps[m.name][bName] = GetTime()
+                                            end
+                                        end
+                                    end
+                                end
+                                
+                                TargetLastTarget()
+                                self:ScanRaid()
+                                self:UpdateBuffBar()
+                                return
+                            else
+                                TargetLastTarget() -- Out of range
+                            end
                         else
-                            -- Out of range, restore target and try next person
-                            TargetLastTarget()
+                            TargetLastTarget() -- Could not target
                         end
-                    else
-                        -- Couldn't target, restore and try next person
-                        TargetLastTarget()
-                    end
+                     end
                 end
             end
-            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No targets in range for Group "..gid)
+            if isRightClick then
+                DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No targets missing buff in Group "..gid)
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No targets in range for Group "..gid)
+            end
             TargetLastTarget()
         end
     end

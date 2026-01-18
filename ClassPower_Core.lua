@@ -19,6 +19,9 @@ local DEFAULT_CONFIG = {
     smartbuffs = 1,
     Scale = 0.7,
     ConfigScale = 0.8,
+    BuffDisplayMode = "missing",  -- "always" | "timer" | "missing"
+    TimerThresholdMinutes = 5,
+    TimerThresholdSeconds = 0,
 }
 
 -- Prefix for addon messages
@@ -226,8 +229,10 @@ function CP_CreateHUDButton(parent, name)
     local icon = btn:CreateTexture(btn:GetName().."Icon", "BACKGROUND")
     icon:SetAllPoints(btn)
     
+    -- Position text to the RIGHT of the button, not on top
     local txt = btn:CreateFontString(btn:GetName().."Text", "OVERLAY", "GameFontHighlightSmall")
-    txt:SetPoint("CENTER", btn, "CENTER", 0, 0)
+    txt:SetPoint("LEFT", btn, "RIGHT", 4, 0)
+    txt:SetJustifyH("LEFT")
     
     local nt = btn:CreateTexture(btn:GetName().."NormalTexture")
     nt:SetTexture("Interface\\Buttons\\UI-Quickslot2")
@@ -264,6 +269,8 @@ function ClassPower_SlashHandler(msg)
     elseif msg == "reset" then
         CP_PerUser = {}
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r Settings reset.")
+    elseif msg == "config" or msg == "settings" then
+        CP_ToggleSettingsPanel()
     else
         -- Pass to active module
         if ClassPower.activeModule and ClassPower.activeModule.OnSlashCommand then
@@ -450,4 +457,206 @@ minimapInitFrame:SetScript("OnEvent", function()
     ClassPower_CreateMinimapButton()
 end)
 
+-----------------------------------------------------------------------------------
+-- Time Formatting Helper
+-----------------------------------------------------------------------------------
+
+function CP_FormatTime(seconds)
+    if not seconds or seconds <= 0 then return "" end
+    local m = math.floor(seconds / 60)
+    local s = math.floor(seconds) - (m * 60)
+    return string.format("%d:%02d", m, s)
+end
+
+-----------------------------------------------------------------------------------
+-- Shared Settings Panel
+-----------------------------------------------------------------------------------
+
+local CP_SettingsPanel = nil
+
+function CP_CreateSettingsPanel()
+    if CP_SettingsPanel then return CP_SettingsPanel end
+    
+    local f = CreateFrame("Frame", "ClassPowerSettingsPanel", UIParent)
+    f:SetWidth(280)
+    f:SetHeight(200)
+    f:SetPoint("CENTER", 0, 0)
+    f:SetBackdrop({
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = { left = 11, right = 12, top = 12, bottom = 11 }
+    })
+    f:SetFrameStrata("DIALOG")
+    f:SetToplevel(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:SetClampedToScreen(true)
+    
+    f:SetScript("OnMouseDown", function()
+        if arg1 == "LeftButton" then this:StartMoving() end
+    end)
+    f:SetScript("OnMouseUp", function()
+        this:StopMovingOrSizing()
+    end)
+    
+    -- Title
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", f, "TOP", 0, -18)
+    title:SetText("ClassPower Display Settings")
+    
+    -- Close button
+    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -5, -5)
+    
+    -- Display Mode Label
+    local modeLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    modeLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -48)
+    modeLabel:SetText("Display Mode:")
+    
+    -- Display Mode Buttons (radio-style)
+    local modes = {
+        { value = "missing", label = "Show when buffs missing" },
+        { value = "timer", label = "Show before expiration" },
+        { value = "always", label = "Always show with timers" },
+    }
+    
+    local lastBtn = nil
+    for i, mode in ipairs(modes) do
+        local btn = CreateFrame("CheckButton", "CPSettingsMode"..i, f, "UIRadioButtonTemplate")
+        if i == 1 then
+            btn:SetPoint("TOPLEFT", f, "TOPLEFT", 25, -68)
+        else
+            btn:SetPoint("TOPLEFT", lastBtn, "BOTTOMLEFT", 0, -2)
+        end
+        
+        local label = getglobal(btn:GetName().."Text")
+        if label then
+            label:SetText(mode.label)
+            label:SetFontObject(GameFontHighlightSmall)
+        end
+        
+        btn.value = mode.value
+        btn:SetScript("OnClick", function()
+            CP_PerUser.BuffDisplayMode = this.value
+            CP_UpdateSettingsPanel()
+            if ClassPower.activeModule and ClassPower.activeModule.UIDirty ~= nil then
+                ClassPower.activeModule.UIDirty = true
+            end
+        end)
+        
+        lastBtn = btn
+    end
+    
+    -- Timer Threshold section
+    local threshLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    threshLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -135)
+    threshLabel:SetText("Timer Threshold:")
+    
+    -- Minutes slider
+    local minSlider = CreateFrame("Slider", "CPSettingsMinutes", f, "OptionsSliderTemplate")
+    minSlider:SetWidth(90)
+    minSlider:SetHeight(14)
+    minSlider:SetPoint("TOPLEFT", f, "TOPLEFT", 25, -160)
+    minSlider:SetMinMaxValues(0, 30)
+    minSlider:SetValueStep(1)
+    minSlider:SetValue(CP_PerUser.TimerThresholdMinutes or 5)
+    
+    getglobal(minSlider:GetName().."Low"):SetText("0m")
+    getglobal(minSlider:GetName().."High"):SetText("30m")
+    getglobal(minSlider:GetName().."Text"):SetText("Minutes")
+    
+    local minValue = f:CreateFontString("CPSettingsMinutesValue", "OVERLAY", "GameFontHighlightSmall")
+    minValue:SetPoint("TOP", minSlider, "BOTTOM", 0, -2)
+    minValue:SetText((CP_PerUser.TimerThresholdMinutes or 5).."m")
+    
+    minSlider:SetScript("OnValueChanged", function()
+        local val = math.floor(this:GetValue())
+        CP_PerUser.TimerThresholdMinutes = val
+        getglobal("CPSettingsMinutesValue"):SetText(val.."m")
+    end)
+    
+    -- Seconds slider
+    local secSlider = CreateFrame("Slider", "CPSettingsSeconds", f, "OptionsSliderTemplate")
+    secSlider:SetWidth(90)
+    secSlider:SetHeight(14)
+    secSlider:SetPoint("TOPLEFT", minSlider, "TOPRIGHT", 30, 0)
+    secSlider:SetMinMaxValues(0, 59)
+    secSlider:SetValueStep(5)
+    secSlider:SetValue(CP_PerUser.TimerThresholdSeconds or 0)
+    
+    getglobal(secSlider:GetName().."Low"):SetText("0s")
+    getglobal(secSlider:GetName().."High"):SetText("59s")
+    getglobal(secSlider:GetName().."Text"):SetText("Seconds")
+    
+    local secValue = f:CreateFontString("CPSettingsSecondsValue", "OVERLAY", "GameFontHighlightSmall")
+    secValue:SetPoint("TOP", secSlider, "BOTTOM", 0, -2)
+    secValue:SetText((CP_PerUser.TimerThresholdSeconds or 0).."s")
+    
+    secSlider:SetScript("OnValueChanged", function()
+        local val = math.floor(this:GetValue())
+        CP_PerUser.TimerThresholdSeconds = val
+        getglobal("CPSettingsSecondsValue"):SetText(val.."s")
+    end)
+    
+    f:Hide()
+    CP_SettingsPanel = f
+    return f
+end
+
+function CP_UpdateSettingsPanel()
+    if not CP_SettingsPanel then return end
+    
+    local mode = CP_PerUser.BuffDisplayMode or "missing"
+    
+    for i = 1, 3 do
+        local btn = getglobal("CPSettingsMode"..i)
+        if btn then
+            btn:SetChecked(btn.value == mode)
+        end
+    end
+    
+    -- Note: Sliders don't have Enable/Disable in 1.12.1, they stay enabled
+end
+
+function CP_ToggleSettingsPanel()
+    CP_CreateSettingsPanel()
+    
+    if CP_SettingsPanel:IsVisible() then
+        CP_SettingsPanel:Hide()
+    else
+        -- Update values from saved vars
+        local minSlider = getglobal("CPSettingsMinutes")
+        local secSlider = getglobal("CPSettingsSeconds")
+        
+        if minSlider then
+            minSlider:SetValue(CP_PerUser.TimerThresholdMinutes or 5)
+        end
+        if secSlider then
+            secSlider:SetValue(CP_PerUser.TimerThresholdSeconds or 0)
+        end
+        
+        CP_UpdateSettingsPanel()
+        CP_SettingsPanel:Show()
+    end
+end
+
+function CP_ShowSettingsPanel()
+    CP_CreateSettingsPanel()
+    
+    local minSlider = getglobal("CPSettingsMinutes")
+    local secSlider = getglobal("CPSettingsSeconds")
+    
+    if minSlider then
+        minSlider:SetValue(CP_PerUser.TimerThresholdMinutes or 5)
+    end
+    if secSlider then
+        secSlider:SetValue(CP_PerUser.TimerThresholdSeconds or 0)
+    end
+    
+    CP_UpdateSettingsPanel()
+    CP_SettingsPanel:Show()
+end
+
 CP_Debug("ClassPower Core loaded.")
+
