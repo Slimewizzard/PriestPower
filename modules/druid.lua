@@ -35,8 +35,9 @@ Druid.BUFF_MOTW = 0
 Druid.BUFF_THORNS = 1
 
 -- Buff durations in seconds (for timer calculations)
+-- Using Gift of the Wild duration (60 min) since that's what's typically cast in groups
 Druid.BuffDurations = {
-    MotW = 1800,      -- 30 minutes for single target
+    MotW = 3600,      -- 60 minutes (using GotW duration for group estimation)
     GotW = 3600,      -- 1 hour for group
     Thorns = 600,     -- 10 minutes
     Emerald = 1800,   -- 30 minutes (estimate)
@@ -1005,10 +1006,12 @@ function Druid:UpdateBuffBar()
         end
     end
     
-    -- Dynamic height
+    -- Dynamic height (only update if changed)
     local newHeight = 25 + (count * 34)
     if newHeight < 40 then newHeight = 40 end
-    f:SetHeight(newHeight)
+    if f:GetHeight() ~= newHeight then
+        f:SetHeight(newHeight)
+    end
     
     -- Dynamic width based on actual text content
     -- Calculate: label(40) + button(30) + padding(4) + text width + right margin(10)
@@ -1058,7 +1061,7 @@ function Druid:UpdateBuffBar()
     -- Width = left padding(5) + label width(35) + button(30) + gap(4) + text + right padding(10)
     local newWidth = 5 + 35 + 30 + 4 + maxTextWidth + 10
     if newWidth < 80 then newWidth = 80 end  -- Minimum width
-    if count > 0 then
+    if count > 0 and f:GetWidth() ~= newWidth then
         f:SetWidth(newWidth)
     end
 end
