@@ -2452,6 +2452,21 @@ function Paladin:UpdateUI()
     end
 end
 
+function Paladin:UpdateLeaderButtons()
+    if not self.ConfigWindow then return end
+    
+    local autoBtn = getglobal(self.ConfigWindow:GetName().."AutoAssignBtn")
+    local tankBtn = getglobal(self.ConfigWindow:GetName().."TankListBtn")
+    
+    if ClassPower_IsPromoted() then
+        if autoBtn then autoBtn:Show() end
+        if tankBtn then tankBtn:Show() end
+    else
+        if autoBtn then autoBtn:Hide() end
+        if tankBtn then tankBtn:Hide() end
+    end
+end
+
 function Paladin:ResetUI()
     CP_PerUser.PaladinPoint = nil
     CP_PerUser.PaladinRelativePoint = nil

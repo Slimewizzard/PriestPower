@@ -180,6 +180,9 @@ function Druid:OnEvent(event)
             self.UIDirty = true
         end
         
+        -- Update button visibility when roster/rank changes
+        self:UpdateLeaderButtons()
+        
         if event == "RAID_ROSTER_UPDATE" then
             if GetTime() - self.LastRequest > 5 then
                 self:RequestSync()
@@ -2199,6 +2202,18 @@ function Druid:UpdateUI()
     self:UpdateBuffBar()
     if self.ConfigWindow and self.ConfigWindow:IsVisible() then
         self:UpdateConfigGrid()
+    end
+end
+
+function Druid:UpdateLeaderButtons()
+    if not self.ConfigWindow then return end
+    
+    local autoBtn = getglobal(self.ConfigWindow:GetName().."AutoAssignBtn")
+    
+    if ClassPower_IsPromoted() then
+        if autoBtn then autoBtn:Show() end
+    else
+        if autoBtn then autoBtn:Hide() end
     end
 end
 
