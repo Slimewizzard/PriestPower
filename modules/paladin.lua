@@ -150,6 +150,7 @@ Paladin.JudgementAssignments = {} -- { [paladinName] = judgementID }
 Paladin.BuffTimestamps = {}       -- { [playerName] = { [blessingID] = { startTime=X, isGreater=bool } } }
 Paladin.RankInfo = {}
 Paladin.SymbolCount = 0           -- Symbol of Kings count
+Paladin.TankList = {}             -- { "TankName1", "TankName2", ... } - tanks skip Salvation
 
 -- Estimated durations
 Paladin.BuffDurations = {
@@ -231,6 +232,15 @@ function Paladin:OnLoad()
     end
     UIDropDownMenu_Initialize(ClassPowerPaladinJudgeDropDown, function(level) Paladin:JudgeDropDown_Initialize(level) end, "MENU")
     
+    -- Tank List dropdown
+    if not getglobal("ClassPowerPaladinTankDropDown") then
+        CreateFrame("Frame", "ClassPowerPaladinTankDropDown", UIParent, "UIDropDownMenuTemplate")
+    end
+    UIDropDownMenu_Initialize(ClassPowerPaladinTankDropDown, function(level) Paladin:TankDropDown_Initialize(level) end, "MENU")
+    
+    -- Load saved tank list
+    self:LoadTankList()
+    
     -- Request sync from other paladins
     self:RequestSync()
 end
@@ -256,6 +266,9 @@ function Paladin:OnEvent(event)
             self:ScanRaid()
             self.UIDirty = true
         end
+        
+        -- Update button visibility when roster/rank changes
+        self:UpdateLeaderButtons()
         
         if event == "RAID_ROSTER_UPDATE" then
             if GetTime() - self.LastRequest > 5 then
@@ -678,6 +691,194 @@ function Paladin:GetClassID(class)
         end
     end
     return -1
+end
+
+-----------------------------------------------------------------------------------
+-- Tank List (for Salvation exemptions)
+-----------------------------------------------------------------------------------
+
+function Paladin:IsTank(playerName)
+    for _, tank in ipairs(self.TankList) do
+        if tank == playerName then
+            return true
+        end
+    end
+    return false
+end
+
+function Paladin:AddToTankList(playerName)
+    if not self:IsTank(playerName) then
+        table.insert(self.TankList, playerName)
+        self:SaveTankList()
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Added "..playerName.." to Tank List")
+    end
+end
+
+function Paladin:RemoveFromTankList(playerName)
+    for i, tank in ipairs(self.TankList) do
+        if tank == playerName then
+            table.remove(self.TankList, i)
+            self:SaveTankList()
+            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Removed "..playerName.." from Tank List")
+            return
+        end
+    end
+end
+
+function Paladin:ClearTankList()
+    self.TankList = {}
+    self:SaveTankList()
+    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Tank List cleared")
+end
+
+function Paladin:SaveTankList()
+    CP_PerUser.PaladinTankList = self.TankList
+end
+
+function Paladin:LoadTankList()
+    if CP_PerUser.PaladinTankList then
+        self.TankList = CP_PerUser.PaladinTankList
+    end
+end
+
+-----------------------------------------------------------------------------------
+-- Auto-Assign
+-----------------------------------------------------------------------------------
+
+-- Class needs reference (blessing IDs: 0=Wisdom, 1=Might, 2=Salvation, 3=Light, 4=Kings, 5=Sanctuary)
+Paladin.ClassBlessingNeeds = {
+    -- [classID] = { blessingID = true/false }
+    [0] = { [0]=false, [1]=true,  [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Warrior (no Wisdom)
+    [1] = { [0]=false, [1]=true,  [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Rogue (no Wisdom)
+    [2] = { [0]=true,  [1]=false, [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Priest (no Might)
+    [3] = { [0]=true,  [1]=true,  [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Druid (all)
+    [4] = { [0]=true,  [1]=true,  [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Paladin (all)
+    [5] = { [0]=true,  [1]=true,  [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Hunter (all - uses mana)
+    [6] = { [0]=true,  [1]=false, [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Mage (no Might)
+    [7] = { [0]=true,  [1]=false, [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Warlock (no Might)
+    [8] = { [0]=true,  [1]=true,  [2]=true,  [3]=true, [4]=true, [5]=true  }, -- Shaman (all)
+    [9] = { [0]=false, [1]=true,  [2]=false, [3]=false,[4]=true, [5]=false }, -- Pet (Kings, Might only)
+}
+
+function Paladin:AutoAssign()
+    if not ClassPower_IsPromoted() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Auto-assign requires Leader/Assist.")
+        return
+    end
+    
+    -- Load tank list
+    self:LoadTankList()
+    
+    -- Get list of classes present in raid
+    local classesPresent = {}
+    for classID = 0, 9 do
+        if self.CurrentBuffsByClass[classID] and table.getn(self.CurrentBuffsByClass[classID]) > 0 then
+            classesPresent[classID] = true
+        end
+    end
+    
+    -- Get list of Paladins and their capabilities
+    local paladins = {}
+    for paladinName, info in pairs(self.AllPaladins) do
+        local pdata = {
+            name = paladinName,
+            blessings = {},
+            hasImprovedBlessings = false,
+        }
+        for bID = 0, 5 do
+            if info[bID] then
+                pdata.blessings[bID] = true
+                -- Check for Improved Blessings talent
+                if info[bID].talent and info[bID].talent > 0 then
+                    pdata.hasImprovedBlessings = true
+                end
+            end
+        end
+        table.insert(paladins, pdata)
+    end
+    
+    if table.getn(paladins) == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No Paladins found.")
+        return
+    end
+    
+    -- Clear all existing blessing assignments
+    for _, pdata in ipairs(paladins) do
+        self.Assignments[pdata.name] = {}
+        for classID = 0, 9 do
+            self.Assignments[pdata.name][classID] = -1
+        end
+    end
+    
+    -- Track which Paladins are assigned to which blessings
+    local blessingAssignments = {} -- { [blessingID] = paladinName }
+    local usedPaladins = {}
+    
+    -- Priority: Salvation(2) > Kings(4) > Might(1)/Wisdom(0) > Light(3) > Sanctuary(5)
+    local priorityOrder = { 2, 4, 1, 0, 3, 5 }
+    
+    -- Find a free Paladin with the blessing
+    local function findPaladinWithBlessing(blessingID, preferImproved)
+        local fallback = nil
+        for _, pdata in ipairs(paladins) do
+            if pdata.blessings[blessingID] and not usedPaladins[pdata.name] then
+                if preferImproved and pdata.hasImprovedBlessings then
+                    return pdata
+                end
+                if not fallback then
+                    fallback = pdata
+                end
+            end
+        end
+        return fallback
+    end
+    
+    -- Assign blessings in priority order
+    for _, bID in ipairs(priorityOrder) do
+        -- Special handling for Might/Wisdom overlap on hybrids
+        local preferImproved = (bID == 0 or bID == 1) -- Prefer improved for Might/Wisdom
+        
+        local paladin = findPaladinWithBlessing(bID, preferImproved)
+        if paladin then
+            usedPaladins[paladin.name] = true
+            blessingAssignments[bID] = paladin.name
+            
+            -- Assign this blessing to all classes that need it
+            for classID = 0, 9 do
+                if classesPresent[classID] then
+                    local needs = self.ClassBlessingNeeds[classID]
+                    if needs and needs[bID] then
+                        self.Assignments[paladin.name][classID] = bID
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Broadcast assignments
+    for paladinName, assigns in pairs(self.Assignments) do
+        for classID = 0, 9 do
+            local bID = assigns[classID]
+            if bID and bID >= 0 then
+                ClassPower_SendMessage("PASSIGN "..paladinName.." "..classID.." "..bID)
+            end
+        end
+    end
+    
+    -- Report
+    local msgs = {}
+    for bID, paladinName in pairs(blessingAssignments) do
+        table.insert(msgs, paladinName.." -> "..self.Blessings[bID].short)
+    end
+    
+    if table.getn(msgs) > 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Auto-assigned: "..table.concat(msgs, ", "))
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No blessings could be assigned.")
+    end
+    
+    -- Update UI
+    self:UpdateConfigGrid()
 end
 
 -----------------------------------------------------------------------------------
@@ -1384,7 +1585,65 @@ function Paladin:CreateConfigWindow()
     btnSettings:SetScript("OnClick", function()
         CP_ShowSettingsPanel()
     end)
-
+    
+    -- Auto-Assign button (only visible for leaders/assists)
+    local autoBtn = CreateFrame("Button", f:GetName().."AutoAssignBtn", f, "UIPanelButtonTemplate")
+    autoBtn:SetWidth(90)
+    autoBtn:SetHeight(24)
+    autoBtn:SetPoint("LEFT", btnSettings, "RIGHT", 10, 0)
+    autoBtn:SetText("Auto-Assign")
+    autoBtn:SetScript("OnClick", function()
+        Paladin:AutoAssign()
+    end)
+    autoBtn:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Auto-Assign Blessings")
+        GameTooltip:AddLine("Automatically distribute blessings", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("based on class needs and priority.", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(" ", 1, 1, 1)
+        GameTooltip:AddLine("Priority: Salv > Kings > Might/Wis > Light > Sanc", 1, 0.82, 0)
+        GameTooltip:AddLine(" ", 1, 1, 1)
+        GameTooltip:AddLine("Requires Leader/Assist", 1, 0.5, 0)
+        GameTooltip:Show()
+    end)
+    autoBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
+    -- Tank List button
+    local tankBtn = CreateFrame("Button", f:GetName().."TankListBtn", f, "UIPanelButtonTemplate")
+    tankBtn:SetWidth(80)
+    tankBtn:SetHeight(24)
+    tankBtn:SetPoint("LEFT", autoBtn, "RIGHT", 10, 0)
+    tankBtn:SetText("Tank List")
+    tankBtn:SetScript("OnClick", function()
+        ToggleDropDownMenu(1, nil, ClassPowerPaladinTankDropDown, this, 0, 0)
+    end)
+    tankBtn:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Tank List")
+        GameTooltip:AddLine("Players on this list will skip", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Salvation assignments.", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(" ", 1, 1, 1)
+        GameTooltip:AddLine("Current: "..table.getn(Paladin.TankList).." tanks", 1, 0.82, 0)
+        GameTooltip:Show()
+    end)
+    tankBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
+    -- Update visibility based on promotion status
+    f:SetScript("OnShow", function()
+        local autoAssignBtn = getglobal(this:GetName().."AutoAssignBtn")
+        local tankListBtn = getglobal(this:GetName().."TankListBtn")
+        if ClassPower_IsPromoted() then
+            if autoAssignBtn then autoAssignBtn:Show() end
+            if tankListBtn then tankListBtn:Show() end
+        else
+            if autoAssignBtn then autoAssignBtn:Hide() end
+            if tankListBtn then tankListBtn:Hide() end
+        end
+    end)
     
     f:Hide()
     self.ConfigWindow = f
@@ -1949,6 +2208,107 @@ function Paladin:JudgeDropDown_OnClick(judgeID)
     -- Save if this is for the current player
     if pname == UnitName("player") then
         self:SaveAssignments()
+    end
+end
+
+function Paladin:TankDropDown_Initialize(level)
+    local info = {}
+    
+    -- Header
+    info.text = "Tank List (Skip Salvation)"
+    info.isTitle = true
+    info.notCheckable = true
+    UIDropDownMenu_AddButton(info)
+    
+    -- Clear all option
+    info = {}
+    info.text = "|cffff6600Clear All Tanks|r"
+    info.notCheckable = true
+    info.func = function()
+        Paladin:ClearTankList()
+        CloseDropDownMenus()
+    end
+    UIDropDownMenu_AddButton(info)
+    
+    -- Separator
+    info = {}
+    info.text = ""
+    info.isTitle = true
+    info.notCheckable = true
+    UIDropDownMenu_AddButton(info)
+    
+    -- Current tanks (with remove option)
+    if table.getn(self.TankList) > 0 then
+        info = {}
+        info.text = "-- Current Tanks --"
+        info.isTitle = true
+        info.notCheckable = true
+        UIDropDownMenu_AddButton(info)
+        
+        for _, tankName in ipairs(self.TankList) do
+            info = {}
+            info.text = tankName .. " |cffff0000[Remove]|r"
+            info.value = tankName
+            info.notCheckable = true
+            info.func = function()
+                Paladin:RemoveFromTankList(this.value)
+                CloseDropDownMenus()
+            end
+            UIDropDownMenu_AddButton(info)
+        end
+        
+        -- Separator
+        info = {}
+        info.text = ""
+        info.isTitle = true
+        info.notCheckable = true
+        UIDropDownMenu_AddButton(info)
+    end
+    
+    -- Add raid members (Warriors, Druids, Paladins - potential tanks)
+    info = {}
+    info.text = "-- Add Tank --"
+    info.isTitle = true
+    info.notCheckable = true
+    UIDropDownMenu_AddButton(info)
+    
+    -- Get raid/party members
+    local numRaid = GetNumRaidMembers()
+    local numParty = GetNumPartyMembers()
+    
+    local function AddMember(name, class)
+        if not name then return end
+        -- Only show if not already a tank
+        if self:IsTank(name) then return end
+        
+        -- Show class-appropriate members (Warriors, Druids, Paladins are common tanks)
+        local classColor = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class] or {r=1, g=1, b=1}
+        local colorCode = string.format("|cff%02x%02x%02x", classColor.r*255, classColor.g*255, classColor.b*255)
+        
+        local memberInfo = {}
+        memberInfo.text = colorCode .. name .. "|r"
+        memberInfo.value = name
+        memberInfo.notCheckable = true
+        memberInfo.func = function()
+            Paladin:AddToTankList(this.value)
+            CloseDropDownMenus()
+        end
+        UIDropDownMenu_AddButton(memberInfo)
+    end
+    
+    if numRaid > 0 then
+        for i = 1, numRaid do
+            local name, _, _, _, _, class = GetRaidRosterInfo(i)
+            AddMember(name, class)
+        end
+    elseif numParty > 0 then
+        for i = 1, numParty do
+            local name = UnitName("party"..i)
+            local _, class = UnitClass("party"..i)
+            AddMember(name, class)
+        end
+        local _, pClass = UnitClass("player")
+        AddMember(UnitName("player"), pClass)
     end
 end
 

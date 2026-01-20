@@ -534,6 +534,95 @@ function Priest:ScanRaid()
 end
 
 -----------------------------------------------------------------------------------
+-- Auto-Assign
+-----------------------------------------------------------------------------------
+
+function Priest:AutoAssign()
+    if not ClassPower_IsPromoted() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Auto-assign requires Leader/Assist.")
+        return
+    end
+    
+    -- Get active groups (groups with players)
+    local activeGroups = ClassPower_GetActiveGroups()
+    if table.getn(activeGroups) == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No groups with players found.")
+        return
+    end
+    
+    -- Get Priests with Prayer buffs for each type
+    -- Buff types: 0=Fort, 1=Spirit, 2=Shadow
+    -- talent = 1 means they have Prayer version
+    local priestsByBuff = {
+        [0] = {}, -- Priests with Prayer of Fortitude
+        [1] = {}, -- Priests with Prayer of Spirit
+        [2] = {}, -- Priests with Prayer of Shadow Protection
+    }
+    
+    for priestName, info in pairs(self.AllPriests) do
+        for buffType = 0, 2 do
+            if info[buffType] and info[buffType].talent == 1 then
+                table.insert(priestsByBuff[buffType], priestName)
+            end
+        end
+    end
+    
+    -- Clear all group assignments first
+    for priestName, _ in pairs(self.AllPriests) do
+        self.Assignments[priestName] = self.Assignments[priestName] or {}
+        for g = 1, 8 do
+            self.Assignments[priestName][g] = 0
+        end
+    end
+    
+    -- Assign each buff type
+    local buffNames = { [0] = "Fort", [1] = "Spirit", [2] = "Shadow" }
+    local msgs = {}
+    
+    for buffType = 0, 2 do
+        local priests = priestsByBuff[buffType]
+        if table.getn(priests) > 0 then
+            local assignments = ClassPower_DistributeGroups(priests, activeGroups)
+            
+            -- Apply assignments (use bit flag: Fort=1, Spirit=2, Shadow=4)
+            local bitFlag = 2 ^ buffType
+            
+            for priestName, groups in pairs(assignments) do
+                for _, g in ipairs(groups) do
+                    -- Add this buff type to existing assignment
+                    local current = self.Assignments[priestName][g] or 0
+                    self.Assignments[priestName][g] = current + bitFlag
+                    ClassPower_SendMessage("ASSIGN "..priestName.." "..g.." "..self.Assignments[priestName][g])
+                end
+            end
+            
+            -- Build report message
+            for priestName, groups in pairs(assignments) do
+                if table.getn(groups) > 0 then
+                    local groupStr = ""
+                    for i, g in ipairs(groups) do
+                        if i > 1 then groupStr = groupStr .. "," end
+                        groupStr = groupStr .. g
+                    end
+                    table.insert(msgs, priestName .. " " .. buffNames[buffType] .. " G" .. groupStr)
+                end
+            end
+        end
+    end
+    
+    -- Report what was done
+    if table.getn(msgs) > 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Auto-assigned: " .. table.concat(msgs, " | "))
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No Priests with Prayer buffs found.")
+    end
+    
+    -- Update UI
+    self:UpdateConfigGrid()
+    self:UpdateBuffBar()
+end
+
+-----------------------------------------------------------------------------------
 -- Sync Protocol
 -----------------------------------------------------------------------------------
 
@@ -1144,7 +1233,40 @@ function Priest:CreateConfigWindow()
     btnSettings:SetScript("OnClick", function()
         CP_ShowSettingsPanel()
     end)
-
+    
+    -- Auto-Assign button (only visible for leaders/assists)
+    local autoBtn = CreateFrame("Button", f:GetName().."AutoAssignBtn", f, "UIPanelButtonTemplate")
+    autoBtn:SetWidth(90)
+    autoBtn:SetHeight(24)
+    autoBtn:SetPoint("LEFT", btnSettings, "RIGHT", 10, 0)
+    autoBtn:SetText("Auto-Assign")
+    autoBtn:SetScript("OnClick", function()
+        Priest:AutoAssign()
+    end)
+    autoBtn:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Auto-Assign Groups")
+        GameTooltip:AddLine("Automatically distribute groups", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("among Priests with Prayer buffs.", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(" ", 1, 1, 1)
+        GameTooltip:AddLine("Requires Leader/Assist", 1, 0.5, 0)
+        GameTooltip:Show()
+    end)
+    autoBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
+    -- Update visibility based on promotion status
+    f:SetScript("OnShow", function()
+        local autoAssignBtn = getglobal(this:GetName().."AutoAssignBtn")
+        if autoAssignBtn then
+            if ClassPower_IsPromoted() then
+                autoAssignBtn:Show()
+            else
+                autoAssignBtn:Hide()
+            end
+        end
+    end)
     
     f:Hide()
     self.ConfigWindow = f

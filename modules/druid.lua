@@ -691,6 +691,74 @@ function Druid:GetInnervateCooldown()
 end
 
 -----------------------------------------------------------------------------------
+-- Auto-Assign
+-----------------------------------------------------------------------------------
+
+function Druid:AutoAssign()
+    if not ClassPower_IsPromoted() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Auto-assign requires Leader/Assist.")
+        return
+    end
+    
+    -- Get active groups (groups with players)
+    local activeGroups = ClassPower_GetActiveGroups()
+    if table.getn(activeGroups) == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No groups with players found.")
+        return
+    end
+    
+    -- Get Druids with Gift of the Wild (talent = 1 means they have Gift)
+    local druidsWithGift = {}
+    for druidName, info in pairs(self.AllDruids) do
+        if info[0] and info[0].talent == 1 then
+            table.insert(druidsWithGift, druidName)
+        end
+    end
+    
+    if table.getn(druidsWithGift) == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No Druids with Gift of the Wild found.")
+        return
+    end
+    
+    -- Distribute groups among Druids
+    local assignments = ClassPower_DistributeGroups(druidsWithGift, activeGroups)
+    
+    -- Apply assignments
+    for druidName, groups in pairs(assignments) do
+        -- Clear existing group assignments for this druid
+        self.Assignments[druidName] = self.Assignments[druidName] or {}
+        for g = 1, 8 do
+            self.Assignments[druidName][g] = 0
+        end
+        
+        -- Assign the new groups (value 1 = assigned)
+        for _, g in ipairs(groups) do
+            self.Assignments[druidName][g] = 1
+            -- Broadcast to other players
+            ClassPower_SendMessage("DASSIGN "..druidName.." "..g.." 1")
+        end
+    end
+    
+    -- Report what was done
+    local msg = "|cff00ff00ClassPower|r: Auto-assigned groups: "
+    for druidName, groups in pairs(assignments) do
+        if table.getn(groups) > 0 then
+            local groupStr = ""
+            for i, g in ipairs(groups) do
+                if i > 1 then groupStr = groupStr .. "," end
+                groupStr = groupStr .. g
+            end
+            msg = msg .. druidName .. " -> G" .. groupStr .. "  "
+        end
+    end
+    DEFAULT_CHAT_FRAME:AddMessage(msg)
+    
+    -- Update UI
+    self:UpdateConfigGrid()
+    self:UpdateBuffBar()
+end
+
+-----------------------------------------------------------------------------------
 -- Sync Protocol
 -----------------------------------------------------------------------------------
 
@@ -1365,6 +1433,40 @@ function Druid:CreateConfigWindow()
     end)
     settingsBtn:SetScript("OnLeave", function()
         GameTooltip:Hide()
+    end)
+    
+    -- Auto-Assign button (only visible for leaders/assists)
+    local autoBtn = CreateFrame("Button", f:GetName().."AutoAssignBtn", f, "UIPanelButtonTemplate")
+    autoBtn:SetWidth(90)
+    autoBtn:SetHeight(22)
+    autoBtn:SetPoint("LEFT", settingsBtn, "RIGHT", 10, 0)
+    autoBtn:SetText("Auto-Assign")
+    autoBtn:SetScript("OnClick", function()
+        Druid:AutoAssign()
+    end)
+    autoBtn:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Auto-Assign Groups")
+        GameTooltip:AddLine("Automatically distribute groups", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("among Druids with Gift of the Wild.", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(" ", 1, 1, 1)
+        GameTooltip:AddLine("Requires Leader/Assist", 1, 0.5, 0)
+        GameTooltip:Show()
+    end)
+    autoBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
+    -- Update visibility based on promotion status
+    f:SetScript("OnShow", function()
+        local autoAssignBtn = getglobal(this:GetName().."AutoAssignBtn")
+        if autoAssignBtn then
+            if ClassPower_IsPromoted() then
+                autoAssignBtn:Show()
+            else
+                autoAssignBtn:Hide()
+            end
+        end
     end)
     
     f:Hide()

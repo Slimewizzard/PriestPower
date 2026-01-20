@@ -658,5 +658,65 @@ function CP_ShowSettingsPanel()
     CP_SettingsPanel:Show()
 end
 
+-----------------------------------------------------------------------------------
+-- Auto-Assign Helper Functions
+-----------------------------------------------------------------------------------
+
+-- Returns a table of group IDs (1-8) that have at least one player
+function ClassPower_GetActiveGroups()
+    local activeGroups = {}
+    local numRaid = GetNumRaidMembers()
+    local numParty = GetNumPartyMembers()
+    
+    if numRaid > 0 then
+        local groupHasPlayers = {}
+        for i = 1, numRaid do
+            local _, _, subgroup = GetRaidRosterInfo(i)
+            if subgroup and subgroup >= 1 and subgroup <= 8 then
+                groupHasPlayers[subgroup] = true
+            end
+        end
+        for g = 1, 8 do
+            if groupHasPlayers[g] then
+                table.insert(activeGroups, g)
+            end
+        end
+    elseif numParty > 0 then
+        -- In a party, everyone is effectively in group 1
+        table.insert(activeGroups, 1)
+    else
+        -- Solo, group 1
+        table.insert(activeGroups, 1)
+    end
+    
+    return activeGroups
+end
+
+-- Distributes groups evenly among a list of players
+-- Returns: { [playerName] = { group1, group2, ... }, ... }
+function ClassPower_DistributeGroups(players, groups)
+    local assignments = {}
+    local numPlayers = table.getn(players)
+    local numGroups = table.getn(groups)
+    
+    if numPlayers == 0 or numGroups == 0 then
+        return assignments
+    end
+    
+    -- Initialize empty assignments for each player
+    for _, player in ipairs(players) do
+        assignments[player] = {}
+    end
+    
+    -- Distribute groups round-robin
+    for i, group in ipairs(groups) do
+        local playerIndex = math.mod(i - 1, numPlayers) + 1
+        local player = players[playerIndex]
+        table.insert(assignments[player], group)
+    end
+    
+    return assignments
+end
+
 CP_Debug("ClassPower Core loaded.")
 
