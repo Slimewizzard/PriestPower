@@ -69,6 +69,16 @@ Druid.RosterDirty = false
 Druid.RosterTimer = 0.5
 Druid.UIDirty = false  -- Only update UI when data changed
 
+-- Distributed Scanning
+Druid.ScanIndex = 1
+Druid.ScanGroup = 1
+Druid.ScanStepSize = 5
+Druid.ScanFrequency = 0.1 -- Process batch every 0.1s
+Druid.ScanTimer = 0
+
+-- Texture Cache for deep optimization
+Druid.UnitTextureCache = {}
+
 -- Context for dropdowns
 Druid.ContextName = nil
 Druid.AssignMode = "Innervate"
@@ -180,6 +190,9 @@ function Druid:OnEvent(event)
             self.UIDirty = true
         end
         
+        -- Update button visibility when roster/rank changes
+        self:UpdateLeaderButtons()
+        
         if event == "RAID_ROSTER_UPDATE" then
             if GetTime() - self.LastRequest > 5 then
                 self:RequestSync()
@@ -234,6 +247,30 @@ function Druid:OnUpdate(elapsed)
         if (self.BuffBar and self.BuffBar:IsVisible()) or 
            (self.ConfigWindow and self.ConfigWindow:IsVisible()) then
             self:UpdateUI()
+        end
+    end
+    
+    -- Background distributed scanning
+    self.ScanTimer = self.ScanTimer - elapsed
+    if self.ScanTimer <= 0 then
+        self.ScanTimer = self.ScanFrequency
+        self:ScanStep()
+    end
+end
+
+function Druid:OnUnitUpdate(unit, name, event)
+    if not name then return end
+    
+    if event == "UNIT_AURA" then
+        -- Only trigger a partial scan for this unit
+        self:ScanUnit(unit, name)
+        self.UIDirty = true
+    elseif event == "UNIT_MANA" or event == "UNIT_MAXMANA" then
+        -- Only trigger UI update if this is our Innervate target
+        local pname = UnitName("player")
+        local target = self.LegacyAssignments[pname] and self.LegacyAssignments[pname]["Innervate"]
+        if name == target then
+            self.UIDirty = true
         end
     end
 end
@@ -300,6 +337,18 @@ function Druid:OnSlashCommand(msg)
     end
 end
 
+-- Show config window (called by admin panel)
+function Druid:ShowConfig()
+    if not self.ConfigWindow then
+        self:CreateConfigWindow()
+    end
+    -- Request fresh sync and scan when opened via admin
+    self:ScanRaid()
+    self:RequestSync()
+    self.ConfigWindow:Show()
+    self:UpdateConfigGrid()
+end
+
 -----------------------------------------------------------------------------------
 -- Spell Scanning
 -----------------------------------------------------------------------------------
@@ -350,7 +399,140 @@ end
 -- Raid/Buff Scanning
 -----------------------------------------------------------------------------------
 
+function Druid:ScanUnit(unit, name)
+    if not unit or not name then return end
+    
+    -- Get subgroup and class if not already known
+    local subgroup = 1
+    local class = nil
+    
+    local numRaid = GetNumRaidMembers()
+    if numRaid > 0 then
+        for i = 1, numRaid do
+            local rname, _, rsub, _, _, rclass = GetRaidRosterInfo(i)
+            if rname == name then
+                subgroup = rsub
+                class = rclass
+                break
+            end
+        end
+    else
+        _, class = UnitClass(unit)
+    end
+    
+    if class == "DRUID" then
+        self.AllDruids[name] = self.AllDruids[name] or {
+            [0] = { rank = 0, talent = 0, name = "MotW" },
+            [1] = { rank = 0, talent = 0, name = "Thorns" },
+            ["Emerald"] = false,
+            ["Innervate"] = false,
+        }
+    end
+
+    if subgroup and subgroup >= 1 and subgroup <= 8 then
+        local buffInfo = {
+            name = name,
+            class = class,
+            visible = UnitIsVisible(unit),
+            dead = UnitIsDeadOrGhost(unit),
+            hasMotW = false,
+            hasThorns = false,
+            hasEmerald = false,
+        }
+        
+        -- Initialize timestamp tracking for this player
+        if not self.BuffTimestamps[name] then
+            self.BuffTimestamps[name] = {}
+        end
+        
+        -- Check Texture Cache
+        local b = 1
+        local textureHash = ""
+        while true do
+            local tex = UnitBuff(unit, b)
+            if not tex then break end
+            textureHash = textureHash .. tex
+            b = b + 1
+        end
+        
+        -- If textures haven't changed, skip heavy scanning
+        if self.UnitTextureCache[name] == textureHash then
+            -- Update simple flags from current buff info if exists
+            local prev = self.CurrentBuffsByName[name]
+            if prev then
+                prev.visible = UnitIsVisible(unit)
+                prev.dead = UnitIsDeadOrGhost(unit)
+            end
+            return 
+        end
+        self.UnitTextureCache[name] = textureHash
+
+        b = 1
+        local foundTextures = ""
+        while true do
+            local buffTexture = UnitBuff(unit, b)
+            if not buffTexture then break end
+            
+            buffTexture = string.lower(buffTexture)
+            foundTextures = foundTextures .. buffTexture
+            
+            -- Mark of the Wild & Gift of the Wild both use: Spell_Nature_Regeneration
+            if string.find(buffTexture, "regeneration") then 
+                buffInfo.hasMotW = true
+                -- Distinguish Gift vs Mark using tooltip only if something changed or timestamp missing
+                if not self.BuffTimestamps[name].MotW then
+                    scanTooltip:SetUnitBuff(unit, b)
+                    local tipText = ClassPowerDruidScanTooltipTextLeft1:GetText()
+                    local isGift = (tipText == "Gift of the Wild")
+                    self.BuffTimestamps[name].MotW = GetTime()
+                    self.BuffTimestamps[name].isGift = isGift
+                end
+            end
+            
+            -- Thorns: Spell_Nature_Thorns
+            if string.find(buffTexture, "thorns") then 
+                buffInfo.hasThorns = true
+                if not self.BuffTimestamps[name].Thorns then
+                    self.BuffTimestamps[name].Thorns = GetTime()
+                end
+            end
+            
+            -- Emerald Blessing: Spell_Nature_ProtectionformNature
+            if string.find(buffTexture, "protectionformnature") then 
+                buffInfo.hasEmerald = true
+                if not self.BuffTimestamps[name].Emerald then
+                    self.BuffTimestamps[name].Emerald = GetTime()
+                end
+            end
+            
+            b = b + 1
+        end
+
+        -- Texture count/content change detection for resetting timestamps
+        -- (Simple version: if they don't have the buff, clear the timestamp)
+        if not buffInfo.hasMotW then self.BuffTimestamps[name].MotW = nil end
+        if not buffInfo.hasThorns then self.BuffTimestamps[name].Thorns = nil end
+        if not buffInfo.hasEmerald then self.BuffTimestamps[name].Emerald = nil end
+
+        -- Update the specific entry in CurrentBuffs
+        self.CurrentBuffs[subgroup] = self.CurrentBuffs[subgroup] or {}
+        local found = false
+        for i, m in ipairs(self.CurrentBuffs[subgroup]) do
+            if m.name == name then
+                self.CurrentBuffs[subgroup][i] = buffInfo
+                found = true
+                break
+            end
+        end
+        if not found then
+            table.insert(self.CurrentBuffs[subgroup], buffInfo)
+        end
+        self.CurrentBuffsByName[name] = buffInfo
+    end
+end
+
 function Druid:ScanRaid()
+    -- Full scan resets everything and does it all at once (for roster changes)
     self.CurrentBuffs = {}
     for i = 1, 8 do self.CurrentBuffs[i] = {} end
     self.CurrentBuffsByName = {}
@@ -362,110 +544,25 @@ function Druid:ScanRaid()
     if UnitClass("player") == "Druid" then
         foundDruids[UnitName("player")] = true
     end
-    
-    local function ProcessUnit(unit, name, subgroup, class)
-        local isValid = (unit == "player") or string.find(unit, "^party%d+$") or string.find(unit, "^raid%d+$")
-        if not isValid or not UnitExists(unit) then return end
-        
-        if name and class == "DRUID" then
-            foundDruids[name] = true
-            if not self.AllDruids[name] then
-                self.AllDruids[name] = {
-                    [0] = { rank = 0, talent = 0, name = "MotW" },
-                    [1] = { rank = 0, talent = 0, name = "Thorns" },
-                    ["Emerald"] = false,
-                    ["Innervate"] = false,
-                }
-            end
-        end
-        
-        if name and subgroup and subgroup >= 1 and subgroup <= 8 then
-            local buffInfo = {
-                name = name,
-                class = class,
-                visible = UnitIsVisible(unit),
-                dead = UnitIsDeadOrGhost(unit),
-                hasMotW = false,
-                hasThorns = false,
-                hasEmerald = false,
-            }
-            
-            -- Initialize timestamp tracking for this player
-            if not self.BuffTimestamps[name] then
-                self.BuffTimestamps[name] = {}
-            end
-            
-            local b = 1
-            while true do
-                local buffTexture = UnitBuff(unit, b)
-                if not buffTexture then break end
-                
-                -- UnitBuff returns the texture path, convert to lowercase for matching
-                buffTexture = string.lower(buffTexture)
-                
-                -- Mark of the Wild & Gift of the Wild both use: Spell_Nature_Regeneration
-                if string.find(buffTexture, "regeneration") then 
-                    buffInfo.hasMotW = true
-                    
-                    -- Check Tooltip for "Gift of the Wild" vs "Mark of the Wild"
-                    scanTooltip:SetUnitBuff(unit, b)
-                    local tipText = ClassPowerDruidScanTooltipTextLeft1:GetText()
-                    local isGift = (tipText == "Gift of the Wild")
-                    
-                    if not self.BuffTimestamps[name] then self.BuffTimestamps[name] = {} end
-                    
-                    -- Update timestamp if new or type changed
-                    if not self.BuffTimestamps[name].MotW or self.BuffTimestamps[name].isGift ~= isGift then
-                        self.BuffTimestamps[name].MotW = GetTime()
-                        self.BuffTimestamps[name].isGift = isGift
-                    end
-                end
-                
-                -- Thorns: Spell_Nature_Thorns
-                if string.find(buffTexture, "thorns") then 
-                    buffInfo.hasThorns = true
-                    if not self.BuffTimestamps[name].Thorns then
-                        self.BuffTimestamps[name].Thorns = GetTime()
-                    end
-                end
-                
-                -- Emerald Blessing: Spell_Nature_ProtectionformNature
-                if string.find(buffTexture, "protectionformnature") then 
-                    buffInfo.hasEmerald = true
-                    if not self.BuffTimestamps[name].Emerald then
-                        self.BuffTimestamps[name].Emerald = GetTime()
-                    end
-                end
-                
-                b = b + 1
-            end
-            
-            -- Clear timestamps for buffs that are no longer present (only if visible)
-            if UnitIsVisible(unit) then
-                if not buffInfo.hasMotW then self.BuffTimestamps[name].MotW = nil end
-                if not buffInfo.hasThorns then self.BuffTimestamps[name].Thorns = nil end
-                if not buffInfo.hasEmerald then self.BuffTimestamps[name].Emerald = nil end
-            end
-            
-            if not self.CurrentBuffs[subgroup] then self.CurrentBuffs[subgroup] = {} end
-            table.insert(self.CurrentBuffs[subgroup], buffInfo)
-            self.CurrentBuffsByName[name] = buffInfo
-        end
-    end
-    
+
     if numRaid > 0 then
         for i = 1, numRaid do
             local name, _, subgroup, _, _, class = GetRaidRosterInfo(i)
-            ProcessUnit("raid"..i, name, subgroup, class)
+            self:ScanUnit("raid"..i, name)
+            if class == "DRUID" then foundDruids[name] = true end
         end
     elseif numParty > 0 then
+        self:ScanUnit("player", UnitName("player"))
+        if UnitClass("player") == "Druid" then foundDruids[UnitName("player")] = true end
         for i = 1, numParty do
             local name = UnitName("party"..i)
             local _, class = UnitClass("party"..i)
-            ProcessUnit("party"..i, name, 1, class)
+            self:ScanUnit("party"..i, name)
+            if class == "DRUID" then foundDruids[name] = true end
         end
-        local _, pClass = UnitClass("player")
-        ProcessUnit("player", UnitName("player"), 1, pClass)
+    else
+        self:ScanUnit("player", UnitName("player"))
+        if UnitClass("player") == "Druid" then foundDruids[UnitName("player")] = true end
     end
     
     -- Cleanup druids who left
@@ -475,6 +572,39 @@ function Druid:ScanRaid()
             self.Assignments[name] = nil
         end
     end
+    
+    self.ScanIndex = 1
+end
+
+function Druid:ScanStep()
+    local numRaid = GetNumRaidMembers()
+    local numParty = GetNumPartyMembers()
+    
+    local count = 0
+    if numRaid > 0 then
+        while count < self.ScanStepSize do
+            if self.ScanIndex > numRaid then self.ScanIndex = 1 end
+            local name = GetRaidRosterInfo(self.ScanIndex)
+            if name then
+                self:ScanUnit("raid"..self.ScanIndex, name)
+                count = count + 1
+            end
+            self.ScanIndex = self.ScanIndex + 1
+            if self.ScanIndex > numRaid then break end
+        end
+    elseif numParty > 0 then
+        -- Party scanning is small enough to do in one step usually, but keep logic consistent
+        if self.ScanIndex > (numParty + 1) then self.ScanIndex = 1 end
+        if self.ScanIndex == 1 then
+            self:ScanUnit("player", UnitName("player"))
+        else
+            local idx = self.ScanIndex - 1
+            self:ScanUnit("party"..idx, UnitName("party"..idx))
+        end
+        self.ScanIndex = self.ScanIndex + 1
+    end
+    
+    self.UIDirty = true
 end
 
 -----------------------------------------------------------------------------------
@@ -691,6 +821,112 @@ function Druid:GetInnervateCooldown()
 end
 
 -----------------------------------------------------------------------------------
+-- Auto-Assign
+-----------------------------------------------------------------------------------
+
+function Druid:AutoAssign()
+    if not ClassPower_IsPromoted() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Auto-assign requires Leader/Assist.")
+        return
+    end
+    
+    -- Get active groups (groups with players)
+    local activeGroups = ClassPower_GetActiveGroups()
+    if table.getn(activeGroups) == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No groups with players found.")
+        return
+    end
+    
+    -- Get Druids with Gift of the Wild (talent = 1 means they have Gift)
+    local druidsWithGift = {}
+    for druidName, info in pairs(self.AllDruids) do
+        if info[0] and info[0].talent == 1 then
+            table.insert(druidsWithGift, druidName)
+        end
+    end
+    
+    if table.getn(druidsWithGift) == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No Druids with Gift of the Wild found.")
+        return
+    end
+    
+    -- Distribute groups among Druids
+    local assignments = ClassPower_DistributeGroups(druidsWithGift, activeGroups)
+    
+    -- Apply assignments and broadcast
+    for druidName, groups in pairs(assignments) do
+        -- Clear existing group assignments for this druid
+        self.Assignments[druidName] = self.Assignments[druidName] or {}
+        local assignStr = ""
+        
+        for g = 1, 8 do
+            local assigned = 0
+            for _, ag in ipairs(groups) do
+                if ag == g then assigned = 1 break end
+            end
+            self.Assignments[druidName][g] = assigned
+            assignStr = assignStr .. assigned
+        end
+        
+        -- Broadcast batch assignment
+        ClassPower_SendMessage("DASSIGNS "..druidName.." "..assignStr)
+    end
+    
+    -- Report what was done
+    local msg = "|cff00ff00ClassPower|r: Auto-assigned groups: "
+    for druidName, groups in pairs(assignments) do
+        if table.getn(groups) > 0 then
+            local groupStr = ""
+            for i, g in ipairs(groups) do
+                if i > 1 then groupStr = groupStr .. "," end
+                groupStr = groupStr .. g
+            end
+            msg = msg .. druidName .. " -> G" .. groupStr .. "  "
+        end
+    end
+    DEFAULT_CHAT_FRAME:AddMessage(msg)
+    
+    -- Sync Thorns from Tank List (for current player)
+    self:SyncThornsWithTanks()
+    
+    -- Update UI
+    self:UpdateConfigGrid()
+    self:UpdateBuffBar()
+    
+    -- Save assignments
+    self:SaveAssignments()
+end
+
+function Druid:SyncThornsWithTanks()
+    if not ClassPower_TankList then return end
+    
+    local pname = UnitName("player")
+    if not self.ThornsList[pname] then self.ThornsList[pname] = {} end
+    
+    local count = 0
+    for _, tank in ipairs(ClassPower_TankList) do
+        -- Check if already in list
+        local found = false
+        for _, tName in ipairs(self.ThornsList[pname]) do
+            if tName == tank.name then 
+                found = true 
+                break 
+            end
+        end
+        
+        if not found then
+            table.insert(self.ThornsList[pname], tank.name)
+            count = count + 1
+        end
+    end
+    
+    if count > 0 then
+        self:SaveThornsList()
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Added "..count.." tanks to your Thorns list.")
+    end
+end
+
+-----------------------------------------------------------------------------------
 -- Sync Protocol
 -----------------------------------------------------------------------------------
 
@@ -770,6 +1006,23 @@ function Druid:OnAddonMessage(sender, msg)
             self.LegacyAssignments[sender]["Innervate"] = nil
         end
         self.UIDirty = true
+    elseif string.find(msg, "^DASSIGNS ") then
+        local _, _, name, assignStr = string.find(msg, "^DASSIGNS (.-) (.*)")
+        if name and assignStr then
+            if sender == name or ClassPower_IsPromoted(sender) then
+                self.Assignments[name] = self.Assignments[name] or {}
+                for gid = 1, 8 do
+                    local val = string.sub(assignStr, gid, gid)
+                    if val ~= "n" and val ~= "" then
+                        self.Assignments[name][gid] = tonumber(val)
+                    else
+                        self.Assignments[name][gid] = 0
+                    end
+                end
+                self.UIDirty = true
+                if name == UnitName("player") then self:SaveAssignments() end
+            end
+        end
     elseif string.find(msg, "^DASSIGN ") then
         local _, _, name, grp, skill = string.find(msg, "^DASSIGN (.-) (.-) (.*)")
         if name and grp and skill then
@@ -777,6 +1030,7 @@ function Druid:OnAddonMessage(sender, msg)
                 self.Assignments[name] = self.Assignments[name] or {}
                 self.Assignments[name][tonumber(grp)] = tonumber(skill)
                 self.UIDirty = true
+                if name == UnitName("player") then self:SaveAssignments() end
             end
         end
     elseif string.find(msg, "^DASSIGNTARGET ") then
@@ -801,6 +1055,27 @@ function Druid:OnAddonMessage(sender, msg)
                     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Assignments cleared by "..sender)
                 end
                 self.UIDirty = true
+            end
+        end
+    elseif string.find(msg, "^DTHORNS ") then
+        local _, _, cmd, target, param = string.find(msg, "^DTHORNS ([^ ]+) ([^ ]+) (.*)")
+        -- Try 2-arg match if 3-arg failed (e.g. CLEAR)
+        if not cmd then 
+             _, _, cmd, target = string.find(msg, "^DTHORNS ([^ ]+) (.*)")
+        end
+        
+        if cmd and target then
+            if sender == target or ClassPower_IsPromoted(sender) then
+                if cmd == "ADD" and param then
+                    self:AddToThornsList(target, param)
+                    self.UIDirty = true
+                elseif cmd == "REMOVE" and param then
+                    self:RemoveFromThornsList(target, param)
+                    self.UIDirty = true
+                elseif cmd == "CLEAR" then
+                    self:ClearThornsList(target)
+                    self.UIDirty = true
+                end
             end
         end
     end
@@ -1365,6 +1640,61 @@ function Druid:CreateConfigWindow()
     end)
     settingsBtn:SetScript("OnLeave", function()
         GameTooltip:Hide()
+    end)
+    
+    -- Auto-Assign button (only visible for leaders/assists)
+    local autoBtn = CreateFrame("Button", f:GetName().."AutoAssignBtn", f, "UIPanelButtonTemplate")
+    autoBtn:SetWidth(90)
+    autoBtn:SetHeight(22)
+    autoBtn:SetPoint("LEFT", settingsBtn, "RIGHT", 10, 0)
+    autoBtn:SetText("Auto-Assign")
+    autoBtn:SetScript("OnClick", function()
+        Druid:AutoAssign()
+    end)
+    autoBtn:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Auto-Assign Groups")
+        GameTooltip:AddLine("Automatically distribute groups", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("among Druids with Gift of the Wild.", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(" ", 1, 1, 1)
+        GameTooltip:AddLine("Requires Leader/Assist", 1, 0.5, 0)
+        GameTooltip:Show()
+    end)
+    autoBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
+    -- Close Module Button (for admin usage)
+    local closeModBtn = CreateFrame("Button", f:GetName().."CloseModuleBtn", f, "UIPanelButtonTemplate")
+    closeModBtn:SetWidth(90)
+    closeModBtn:SetHeight(22)
+    closeModBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 15)
+    closeModBtn:SetText("Close Module")
+    closeModBtn:SetScript("OnClick", function()
+        ClassPower:CloseModule("DRUID")
+    end)
+    closeModBtn:Hide()
+
+    -- Update visibility based on promotion status
+    f:SetScript("OnShow", function()
+        local autoAssignBtn = getglobal(this:GetName().."AutoAssignBtn")
+        if autoAssignBtn then
+            if ClassPower_IsPromoted() then
+                autoAssignBtn:Show()
+            else
+                autoAssignBtn:Hide()
+            end
+        end
+        
+        -- Close Module Visibility (only if not player class)
+        local closeBtn = getglobal(this:GetName().."CloseModuleBtn")
+        if closeBtn then
+            if UnitClass("player") ~= "Druid" then
+                closeBtn:Show()
+            else
+                closeBtn:Hide()
+            end
+        end
     end)
     
     f:Hide()
@@ -2005,9 +2335,9 @@ function Druid:ThornsButton_OnClick(btn)
     local druidName = nameStr and nameStr:GetText()
     if not druidName then return end
     
-    -- Only allow self to manage own thorns list
-    if druidName ~= UnitName("player") then
-        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: You can only manage your own Thorns list.")
+    -- Only allow self to manage own thorns list (unless promoted)
+    if druidName ~= UnitName("player") and not ClassPower_IsPromoted() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: You must be promoted (Leader/Assist) to manage others' Thorns list.")
         return
     end
     
@@ -2100,6 +2430,18 @@ function Druid:UpdateUI()
     end
 end
 
+function Druid:UpdateLeaderButtons()
+    if not self.ConfigWindow then return end
+    
+    local autoBtn = getglobal(self.ConfigWindow:GetName().."AutoAssignBtn")
+    
+    if ClassPower_IsPromoted() then
+        if autoBtn then autoBtn:Show() end
+    else
+        if autoBtn then autoBtn:Hide() end
+    end
+end
+
 function Druid:ResetUI()
     CP_PerUser.DruidPoint = nil
     CP_PerUser.DruidRelativePoint = nil
@@ -2169,6 +2511,15 @@ function Druid:TargetDropDown_Initialize(level)
                 info.notCheckable = 1
                 UIDropDownMenu_AddButton(info)
             end
+            
+            -- Add Tanks from TankList Option
+            if ClassPower_TankList and table.getn(ClassPower_TankList) > 0 then
+                info = {}
+                info.text = "|cff00ff00+ Add All Tanks|r"
+                info.value = "ADDTANKS"
+                info.func = function() Druid:AssignTarget_OnClick() end
+                UIDropDownMenu_AddButton(info)
+            end
         end
         
         local numRaid = GetNumRaidMembers()
@@ -2234,15 +2585,33 @@ function Druid:AssignTarget_OnClick()
     
     if mode == "Thorns" then
         -- Handle Thorns list
-        if targetName == "CLEAR" then
+        if targetName == "ADDTANKS" then
+            if ClassPower_TankList then
+                local count = 0
+                for _, tank in ipairs(ClassPower_TankList) do
+                    -- Check if not already in list to avoid spamming "Added" messages locally if possible
+                    -- But AddToThornsList handles duplicates gracefully (prints message though)
+                    self:AddToThornsList(pname, tank.name)
+                    ClassPower_SendMessage("DTHORNS ADD "..pname.." "..tank.name)
+                    count = count + 1
+                end
+                if count > 0 then
+                     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Added all tanks to " .. pname .. "'s Thorns list.")
+                     self:UpdateUI()
+                end
+            end
+        elseif targetName == "CLEAR" then
             self:ClearThornsList(pname)
+            ClassPower_SendMessage("DTHORNS CLEAR "..pname)
         elseif string.find(targetName, "^REMOVE:") then
             local _, _, removeName = string.find(targetName, "^REMOVE:(.*)")
             if removeName then
                 self:RemoveFromThornsList(pname, removeName)
+                ClassPower_SendMessage("DTHORNS REMOVE "..pname.." "..removeName)
             end
         else
             self:AddToThornsList(pname, targetName)
+            ClassPower_SendMessage("DTHORNS ADD "..pname.." "..targetName)
         end
     else
         -- Handle Innervate (single target)
