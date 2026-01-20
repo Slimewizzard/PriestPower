@@ -1402,16 +1402,16 @@ function ClassPower_SlashHandler(msg)
                 ClassPower.activeModule:SetConfigScale(scale)
             end
         else
-            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Usage: /cp scale <0.5-2.0>")
+            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Usage: /cpwr scale <0.5-2.0>")
         end
         
     else
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Usage:")
-        DEFAULT_CHAT_FRAME:AddMessage("  /cp - Open config")
-        DEFAULT_CHAT_FRAME:AddMessage("  /cp admin - Open admin window")
-        DEFAULT_CHAT_FRAME:AddMessage("  /cp debug - Toggle debug")
-        DEFAULT_CHAT_FRAME:AddMessage("  /cp reset - Reset UI positions")
-        DEFAULT_CHAT_FRAME:AddMessage("  /cp scale <n> - Set config scale")
+        DEFAULT_CHAT_FRAME:AddMessage("  /cpwr - Open config")
+        DEFAULT_CHAT_FRAME:AddMessage("  /cpwr admin - Open admin window")
+        DEFAULT_CHAT_FRAME:AddMessage("  /cpwr debug - Toggle debug")
+        DEFAULT_CHAT_FRAME:AddMessage("  /cpwr reset - Reset UI positions")
+        DEFAULT_CHAT_FRAME:AddMessage("  /cpwr scale <n> - Set config scale")
     end
 end
 SlashCmdList["CLASSPOWER"] = ClassPower_SlashHandler
