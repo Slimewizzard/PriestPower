@@ -393,8 +393,28 @@ function ClassPower_OnEvent(event)
 end
 
 function ClassPower_OnUpdate(elapsed)
+    -- Always run active module's OnUpdate
     if ClassPower.activeModule and ClassPower.activeModule.OnUpdate then
         ClassPower.activeModule:OnUpdate(elapsed)
+    end
+    
+    -- Also check other loaded modules with visible config windows (for admin panel)
+    for classToken, loaded in pairs(ClassPower.loadedModules) do
+        if loaded then
+            local module = ClassPower.modules[classToken]
+            -- Skip the active module (already handled above)
+            if module and module ~= ClassPower.activeModule then
+                -- If this module has a visible config window and UIDirty is set, update it
+                if module.ConfigWindow and module.ConfigWindow:IsVisible() then
+                    if module.UIDirty then
+                        module.UIDirty = false
+                        if module.UpdateConfigGrid then
+                            module:UpdateConfigGrid()
+                        end
+                    end
+                end
+            end
+        end
     end
 end
 
@@ -506,13 +526,14 @@ function ClassPower:CreateAdminWindow()
         if ht then ht:SetBlendMode("ADD") end
         
         btn.classToken = class.token
+        btn.classLabel = class.label
         btn:SetScript("OnClick", function()
             ClassPower:SwitchViewModule(this.classToken)
         end)
         
         btn:SetScript("OnEnter", function()
             GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Open "..class.label.." Configuration")
+            GameTooltip:SetText("Open "..this.classLabel.." Configuration")
             GameTooltip:Show()
         end)
         btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
