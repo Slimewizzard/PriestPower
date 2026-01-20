@@ -488,14 +488,19 @@ function ClassPower:CreateAdminWindow()
     
     -- Class buttons
     local classes = {
-        {token = "PRIEST", label = "Priests", icon = "Interface\\Icons\\Spell_Holy_WordFortitude"},
-        {token = "DRUID", label = "Druids", icon = "Interface\\Icons\\Spell_Nature_Regeneration"},
-        {token = "PALADIN", label = "Paladins", icon = "Interface\\Icons\\Spell_Holy_SealOfWisdom"},
+        {token = "PRIEST", label = "Priests", icon = "Interface\\Icons\\Spell_Holy_WordFortitude", implemented = true},
+        {token = "DRUID", label = "Druids", icon = "Interface\\Icons\\Spell_Nature_Regeneration", implemented = true},
+        {token = "PALADIN", label = "Paladins", icon = "Interface\\Icons\\Spell_Holy_SealOfWisdom", implemented = true},
+        {token = "MAGE", label = "Mages", icon = "Interface\\Icons\\Spell_Frost_IceStorm", implemented = false},
+        {token = "SHAMAN", label = "Shamans", icon = "Interface\\Icons\\Spell_Nature_BloodLust", implemented = false},
     }
     
     local buttonWidth = 70
     local buttonHeight = 50
-    local startX = 30
+    local startX = 20
+    
+    -- Resize window to fit all buttons
+    f:SetWidth(20 + (table.getn(classes) * (buttonWidth + 10)))
     
     for i, class in ipairs(classes) do
         local btn = CreateFrame("Button", f:GetName()..class.token, f)
@@ -515,10 +520,19 @@ function ClassPower:CreateAdminWindow()
         icon:SetPoint("TOP", btn, "TOP", 0, -4)
         icon:SetTexture(class.icon)
         
+        -- Dim unimplemented modules
+        if not class.implemented then
+            icon:SetDesaturated(1)
+            icon:SetAlpha(0.5)
+        end
+        
         -- Label
         local label = btn:CreateFontString(btn:GetName().."Label", "OVERLAY", "GameFontNormalSmall")
         label:SetPoint("BOTTOM", btn, "BOTTOM", 0, 4)
         label:SetText(class.label)
+        if not class.implemented then
+            label:SetTextColor(0.5, 0.5, 0.5)
+        end
         
         -- Highlight
         btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
@@ -527,13 +541,23 @@ function ClassPower:CreateAdminWindow()
         
         btn.classToken = class.token
         btn.classLabel = class.label
+        btn.implemented = class.implemented
         btn:SetScript("OnClick", function()
-            ClassPower:SwitchViewModule(this.classToken)
+            if this.implemented then
+                ClassPower:SwitchViewModule(this.classToken)
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: "..this.classLabel.." module not yet implemented.")
+            end
         end)
         
         btn:SetScript("OnEnter", function()
             GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Open "..this.classLabel.." Configuration")
+            if this.implemented then
+                GameTooltip:SetText("Open "..this.classLabel.." Configuration")
+            else
+                GameTooltip:SetText(this.classLabel.." (Not Implemented)")
+                GameTooltip:AddLine("This class module is not yet available.", 1, 0.5, 0)
+            end
             GameTooltip:Show()
         end)
         btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
