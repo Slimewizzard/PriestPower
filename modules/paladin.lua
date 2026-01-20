@@ -855,14 +855,18 @@ function Paladin:AutoAssign()
         end
     end
     
-    -- Broadcast assignments
+    -- Broadcast assignments (Batch)
     for paladinName, assigns in pairs(self.Assignments) do
+        local assignStr = ""
         for classID = 0, 9 do
             local bID = assigns[classID]
             if bID and bID >= 0 then
-                ClassPower_SendMessage("PASSIGN "..paladinName.." "..classID.." "..bID)
+                assignStr = assignStr .. bID
+            else
+                assignStr = assignStr .. "n"
             end
         end
+        ClassPower_SendMessage("PASSIGNS "..paladinName.." "..assignStr)
     end
     
     -- Report
@@ -879,6 +883,7 @@ function Paladin:AutoAssign()
     
     -- Update UI
     self:UpdateConfigGrid()
+    self:SaveAssignments()
 end
 
 -----------------------------------------------------------------------------------
@@ -993,6 +998,25 @@ function Paladin:OnAddonMessage(sender, msg)
                 self.Assignments[name] = self.Assignments[name] or {}
                 self.Assignments[name][tonumber(classID)] = tonumber(blessID)
                 self.UIDirty = true
+                if name == UnitName("player") then self:SaveAssignments() end
+            end
+        end
+        
+    elseif string.find(msg, "^PASSIGNS ") then
+        local _, _, name, assignStr = string.find(msg, "^PASSIGNS (.-) (.*)")
+        if name and assignStr then
+            if sender == name or ClassPower_IsPromoted(sender) then
+                self.Assignments[name] = self.Assignments[name] or {}
+                for classID = 0, 9 do
+                    local val = string.sub(assignStr, classID + 1, classID + 1)
+                    if val ~= "n" and val ~= "" then
+                        self.Assignments[name][classID] = tonumber(val) or -1
+                    else
+                        self.Assignments[name][classID] = -1
+                    end
+                end
+                self.UIDirty = true
+                if name == UnitName("player") then self:SaveAssignments() end
             end
         end
         
@@ -1006,6 +1030,7 @@ function Paladin:OnAddonMessage(sender, msg)
                     self.AuraAssignments[name] = tonumber(auraID)
                 end
                 self.UIDirty = true
+                if name == UnitName("player") then self:SaveAssignments() end
             end
         end
         
@@ -1019,6 +1044,7 @@ function Paladin:OnAddonMessage(sender, msg)
                     self.JudgementAssignments[name] = tonumber(judgeID)
                 end
                 self.UIDirty = true
+                if name == UnitName("player") then self:SaveAssignments() end
             end
         end
         
@@ -1040,6 +1066,7 @@ function Paladin:OnAddonMessage(sender, msg)
                 self.JudgementAssignments[target] = nil
                 if target == UnitName("player") then
                     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Assignments cleared by "..sender)
+                    self:SaveAssignments()
                 end
                 self.UIDirty = true
             end
