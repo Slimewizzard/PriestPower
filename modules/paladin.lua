@@ -147,8 +147,48 @@ Paladin.CurrentBuffsByClass = {}  -- { [classID] = { { name, unit, hasWisdom, ha
 Paladin.Assignments = {}          -- { [paladinName] = { [classID] = blessingID, ... } }
 Paladin.AuraAssignments = {}      -- { [paladinName] = auraID }
 Paladin.JudgementAssignments = {} -- { [paladinName] = judgementID }
+Paladin.BuffTimestamps = {}       -- { [playerName] = { [blessingID] = { startTime=X, isGreater=bool } } }
 Paladin.RankInfo = {}
 Paladin.SymbolCount = 0           -- Symbol of Kings count
+
+-- Estimated durations
+Paladin.BuffDurations = {
+    Normal = 600,   -- 10 min
+    Greater = 1800, -- 30 min
+}
+
+function Paladin:GetEstimatedTimeRemaining(playerName, blessingID)
+    if not self.BuffTimestamps[playerName] then return nil end
+    local startInfo = self.BuffTimestamps[playerName][blessingID]
+    if not startInfo then return nil end
+    
+    local elapsed = GetTime() - startInfo.startTime
+    local duration = startInfo.isGreater and self.BuffDurations.Greater or self.BuffDurations.Normal
+    local remaining = duration - elapsed
+    
+    if remaining < 0 then remaining = 0 end
+    return remaining
+end
+
+function Paladin:GetClassMinTimeRemaining(classID, blessingID)
+    local minTime = nil
+    if not self.CurrentBuffsByClass[classID] then return nil end
+    
+    for _, member in pairs(self.CurrentBuffsByClass[classID]) do
+        if not member.dead then
+            -- Only check if they HAVE the blessing
+            if member[blessingID] then
+                local remaining = self:GetEstimatedTimeRemaining(member.name, blessingID)
+                if remaining then
+                    if not minTime or remaining < minTime then
+                        minTime = remaining
+                    end
+                end
+            end
+        end
+    end
+    return minTime
+end
 
 -- Timers
 Paladin.UpdateTimer = 0
@@ -243,10 +283,15 @@ function Paladin:OnUpdate(elapsed)
         end
     end
     
-    -- UI refresh (5s interval)
+    -- UI refresh (1s interval if timers shown, else 5s)
     self.UpdateTimer = self.UpdateTimer - elapsed
     if self.UpdateTimer <= 0 then
-        self.UpdateTimer = 5.0
+        local displayMode = CP_PerUser.BuffDisplayMode
+        if displayMode == "always" or displayMode == "timer" then
+            self.UpdateTimer = 1.0
+        else
+            self.UpdateTimer = 5.0
+        end
         
         local needsScan = false
         if self.BuffBar and self.BuffBar:IsVisible() then
@@ -444,6 +489,24 @@ function Paladin:ScanRaid()
         foundPaladins[UnitName("player")] = true
     end
     
+    local function UpdateTS(name, bID, hasBuff, isGreater)
+        if not self.BuffTimestamps then self.BuffTimestamps = {} end
+        if not self.BuffTimestamps[name] then self.BuffTimestamps[name] = {} end
+        if hasBuff then
+            if not self.BuffTimestamps[name][bID] then
+                self.BuffTimestamps[name][bID] = { startTime = GetTime(), isGreater = isGreater }
+            else
+                -- Update isGreater status if it changed
+                if self.BuffTimestamps[name][bID].isGreater ~= isGreater then
+                    self.BuffTimestamps[name][bID].isGreater = isGreater
+                    self.BuffTimestamps[name][bID].startTime = GetTime()
+                end
+            end
+        else
+            self.BuffTimestamps[name][bID] = nil
+        end
+    end
+    
     local function ProcessUnit(unit, name, class)
         if not UnitExists(unit) or not name then return end
         
@@ -473,6 +536,8 @@ function Paladin:ScanRaid()
             buffInfo[bID] = false
         end
         
+        local isGreater = {}
+        
         local b = 1
         while true do
             local buffTexture = UnitBuff(unit, b)
@@ -481,24 +546,50 @@ function Paladin:ScanRaid()
             buffTexture = string.lower(buffTexture)
             
             -- Wisdom: Normal=SealOfWisdom, Greater=GreaterBlessingofWisdom
-            if string.find(buffTexture, "wisdom") then buffInfo[0] = true end
+            if string.find(buffTexture, "wisdom") then 
+                buffInfo[0] = true 
+                isGreater[0] = string.find(buffTexture, "greater") 
+            end
             
-            -- Might: Normal=FistOfJustice, Greater=GreaterBlessingofKings (yes, really)
-            if string.find(buffTexture, "fistofjustice") or string.find(buffTexture, "greaterblessingofkings") then buffInfo[1] = true end
+            -- Might: Normal=FistOfJustice, Greater=GreaterBlessingofKings
+            if string.find(buffTexture, "fistofjustice") or string.find(buffTexture, "greaterblessingofkings") then 
+                buffInfo[1] = true
+                isGreater[1] = string.find(buffTexture, "greater")
+            end
             
             -- Salvation: Normal=SealOfSalvation, Greater=GreaterBlessingofSalvation
-            if string.find(buffTexture, "salvation") then buffInfo[2] = true end
+            if string.find(buffTexture, "salvation") then 
+                buffInfo[2] = true
+                isGreater[2] = string.find(buffTexture, "greater")
+            end
             
             -- Light: Normal=PrayerOfHealing02, Greater=GreaterBlessingofLight
-            if string.find(buffTexture, "prayerofhealing") or string.find(buffTexture, "greaterblessingoflight") then buffInfo[3] = true end
+            if string.find(buffTexture, "prayerofhealing") or string.find(buffTexture, "greaterblessingoflight") then 
+                buffInfo[3] = true 
+                isGreater[3] = string.find(buffTexture, "greater")
+            end
             
-            -- Kings: Normal=MageArmor, Greater=Magic_GreaterBlessingofKings (note: Magic_ prefix)
-            if string.find(buffTexture, "magearmor") or string.find(buffTexture, "magic_greaterblessingofkings") then buffInfo[4] = true end
+            -- Kings: Normal=MageArmor, Greater=Magic_GreaterBlessingofKings
+            if string.find(buffTexture, "magearmor") or string.find(buffTexture, "magic_greaterblessingofkings") then 
+                buffInfo[4] = true 
+                isGreater[4] = string.find(buffTexture, "greater")
+            end
             
             -- Sanctuary: Normal=LightningShield, Greater=GreaterBlessingofSanctuary
-            if string.find(buffTexture, "lightningshield") or string.find(buffTexture, "sanctuary") then buffInfo[5] = true end
+            if string.find(buffTexture, "lightningshield") or string.find(buffTexture, "sanctuary") then 
+                buffInfo[5] = true
+                isGreater[5] = string.find(buffTexture, "greater") or string.find(buffTexture, "sanctuary") -- Sanctuary is in both names, but LightningShield is normal
+                if string.find(buffTexture, "lightningshield") then isGreater[5] = false end
+            end
             
             b = b + 1
+        end
+        
+        -- Update Timestamps (only if visible, otherwise we can't trust UnitBuff absence)
+        if UnitIsVisible(unit) then
+            for bID = 0, 5 do
+                UpdateTS(name, bID, buffInfo[bID], isGreater[bID])
+            end
         end
         
         table.insert(self.CurrentBuffsByClass[classID], buffInfo)
@@ -521,31 +612,32 @@ function Paladin:ScanRaid()
             buffInfo[bID] = false
         end
         
+        local isGreater = {}
+        
         local b = 1
         while true do
             local buffTexture = UnitBuff(unit, b)
             if not buffTexture then break end
             buffTexture = string.lower(buffTexture)
             
-            -- Wisdom: Normal=SealOfWisdom, Greater=GreaterBlessingofWisdom
-            if string.find(buffTexture, "wisdom") then buffInfo[0] = true end
-            
-            -- Might: Normal=FistOfJustice, Greater=GreaterBlessingofKings
-            if string.find(buffTexture, "fistofjustice") or string.find(buffTexture, "greaterblessingofkings") then buffInfo[1] = true end
-            
-            -- Salvation
-            if string.find(buffTexture, "salvation") then buffInfo[2] = true end
-            
-            -- Light: Normal=PrayerOfHealing02, Greater=GreaterBlessingofLight
-            if string.find(buffTexture, "prayerofhealing") or string.find(buffTexture, "greaterblessingoflight") then buffInfo[3] = true end
-            
-            -- Kings: Normal=MageArmor, Greater=Magic_GreaterBlessingofKings
-            if string.find(buffTexture, "magearmor") or string.find(buffTexture, "magic_greaterblessingofkings") then buffInfo[4] = true end
-            
-            -- Sanctuary
-            if string.find(buffTexture, "lightningshield") or string.find(buffTexture, "sanctuary") then buffInfo[5] = true end
+            if string.find(buffTexture, "wisdom") then buffInfo[0] = true; isGreater[0] = string.find(buffTexture, "greater") end
+            if string.find(buffTexture, "fistofjustice") or string.find(buffTexture, "greaterblessingofkings") then buffInfo[1] = true; isGreater[1] = string.find(buffTexture, "greater") end
+            if string.find(buffTexture, "salvation") then buffInfo[2] = true; isGreater[2] = string.find(buffTexture, "greater") end
+            if string.find(buffTexture, "prayerofhealing") or string.find(buffTexture, "greaterblessingoflight") then buffInfo[3] = true; isGreater[3] = string.find(buffTexture, "greater") end
+            if string.find(buffTexture, "magearmor") or string.find(buffTexture, "magic_greaterblessingofkings") then buffInfo[4] = true; isGreater[4] = string.find(buffTexture, "greater") end
+            if string.find(buffTexture, "lightningshield") or string.find(buffTexture, "sanctuary") then 
+                buffInfo[5] = true
+                isGreater[5] = (not string.find(buffTexture, "lightningshield"))
+            end
             
             b = b + 1
+        end
+        
+        -- Update Timestamps (only if visible)
+        if UnitIsVisible(unit) then
+            for bID = 0, 5 do
+                UpdateTS(name, bID, buffInfo[bID], isGreater[bID])
+            end
         end
         
         table.insert(self.CurrentBuffsByClass[9], buffInfo)
@@ -999,7 +1091,7 @@ function Paladin:CreateHUDRow(parent, name, id)
     
     local text = f:CreateFontString(f:GetName().."Text", "OVERLAY", "GameFontNormalSmall")
     text:SetPoint("LEFT", buffIcon, "RIGHT", 4, 0)
-    text:SetWidth(50)
+    -- text:SetWidth(50) -- Dynamic width
     text:SetJustifyH("LEFT")
     
     f:SetScript("OnClick", function() Paladin:HUDRow_OnClick(this) end)
@@ -1136,19 +1228,44 @@ function Paladin:HUDRow_OnClick(row)
     
     local members = self.CurrentBuffsByClass[row.classID] or {}
     for _, member in pairs(members) do
-        if member.visible and not member.dead and not member[row.blessingID] then
-            ClearTarget()
-            TargetByName(member.name, true)
-            if UnitName("target") == member.name then
-                if CheckInteractDistance("target", 4) then
-                    CastSpellByName(spellName)
-                    TargetLastTarget()
-                    self:ScanRaid()
-                    self:UpdateBuffBar()
-                    return
+        if member.visible and not member.dead then
+            local shouldCast = false
+            if isRightClick then
+                if not member[row.blessingID] then shouldCast = true end
+            else
+                shouldCast = true -- Always try to cast Greater Blessing if button clicked
+            end
+            
+            if shouldCast then
+                ClearTarget()
+                TargetByName(member.name, true)
+                if UnitName("target") == member.name then
+                    if CheckInteractDistance("target", 4) then
+                        CastSpellByName(spellName)
+                        
+                        -- Reset timestamps for responsiveness
+                        if not isRightClick then
+                             -- Greater Blessing: Reset for everyone in class
+                             if self.BuffTimestamps then
+                                 for _, m in pairs(members) do
+                                     if not self.BuffTimestamps[m.name] then self.BuffTimestamps[m.name] = {} end
+                                     -- Assume success and update timer
+                                     self.BuffTimestamps[m.name][row.blessingID] = { startTime = GetTime(), isGreater = true }
+                                 end
+                             end
+                        end
+                        
+                        TargetLastTarget()
+                        self:ScanRaid()
+                        self:UpdateBuffBar()
+                        return
+                    else
+                        TargetLastTarget() -- Out of range
+                    end
+                else
+                    TargetLastTarget() -- Could not target
                 end
             end
-            TargetLastTarget()
         end
     end
     
@@ -1269,6 +1386,17 @@ function Paladin:CreateConfigWindow()
     else
         f:SetScale(1.0)
     end
+    
+    -- Add Settings button
+    local btnSettings = CreateFrame("Button", "CPPaladinSettingsBtn", f, "UIPanelButtonTemplate")
+    btnSettings:SetWidth(100)
+    btnSettings:SetHeight(24)
+    btnSettings:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 15)
+    btnSettings:SetText("Settings...")
+    btnSettings:SetScript("OnClick", function()
+        CP_ShowSettingsPanel()
+    end)
+
     
     f:Hide()
     self.ConfigWindow = f
@@ -1454,8 +1582,8 @@ function Paladin:UpdateConfigGrid()
         if row then row:Hide() end
     end
     
-    local newHeight = 80 + (rowIndex - 1) * 62  -- Adjusted for new row height
-    if newHeight < 140 then newHeight = 140 end
+    local newHeight = 80 + (rowIndex - 1) * 62 + 40 -- +40 for Settings button
+    if newHeight < 180 then newHeight = 180 end
     self.ConfigWindow:SetHeight(newHeight)
 end
 
@@ -1839,6 +1967,135 @@ end
 -----------------------------------------------------------------------------------
 -- Update UI
 -----------------------------------------------------------------------------------
+
+function Paladin:UpdateBuffBar()
+    if not self.BuffBar then return end
+    
+    local f = self.BuffBar
+    local pname = UnitName("player")
+    local assigns = self.Assignments[pname] or {}
+    
+    local displayMode = CP_PerUser.BuffDisplayMode or "missing"
+    local thresholdSeconds = ((CP_PerUser.TimerThresholdMinutes or 5) * 60) + (CP_PerUser.TimerThresholdSeconds or 0)
+    
+    local maxRowWidth = 120 -- Start smaller to allow shrinking, but keep minimum
+    local lastRow = nil
+    local visibleRows = {}
+    
+    -- Pass 1: Update Content & Calculate Max Width
+    for classID = 0, 9 do
+        local row = getglobal("ClassPowerPaladinHUDRow"..classID)
+        
+        if row then
+            local showRow = false
+            local blessingID = assigns[classID]
+            
+            if blessingID and blessingID >= 0 then
+                -- Check stats
+                local total = 0
+                local missing = 0
+                if self.CurrentBuffsByClass[classID] then
+                    for _, m in pairs(self.CurrentBuffsByClass[classID]) do
+                        total = total + 1
+                        if not m.dead then
+                             if not m[blessingID] then missing = missing + 1 end
+                        end
+                    end
+                end
+                
+                local minTime = self:GetClassMinTimeRemaining(classID, blessingID)
+                
+                -- Determine visibility
+                if displayMode == "always" then
+                    showRow = (total > 0)
+                elseif displayMode == "timer" then
+                     if missing > 0 then
+                         showRow = true
+                     elseif minTime and minTime <= thresholdSeconds then
+                         showRow = true
+                     end
+                else -- missing
+                     showRow = (missing > 0)
+                end
+                
+                if showRow then
+                    -- Update Row Content
+                    row:Show()
+                    table.insert(visibleRows, row)
+                    
+                    local classIcon = getglobal(row:GetName().."ClassIcon")
+                    local buffIcon = getglobal(row:GetName().."BuffIcon")
+                    local text = getglobal(row:GetName().."Text")
+                    
+                    classIcon:SetTexture(self.ClassTextures[classID])
+                    buffIcon:SetTexture(self.BlessingIcons[blessingID])
+                    
+                    -- Update Text
+                    if displayMode == "always" or displayMode == "timer" then
+                         if minTime and minTime > 0 and missing == 0 then
+                              text:SetText(CP_FormatTime(minTime))
+                              text:SetTextColor(0, 1, 0)
+                         elseif missing > 0 then
+                              if minTime and minTime > 0 then
+                                   text:SetText(missing.." ("..CP_FormatTime(minTime)..")")
+                              else
+                                   text:SetText(missing.."/"..total)
+                              end
+                              text:SetTextColor(1, 0, 0)
+                         else
+                              text:SetText(total.."/"..total)
+                              text:SetTextColor(0, 1, 0)
+                         end
+                    else
+                         text:SetText(missing.."/"..total)
+                         text:SetTextColor(1, 0, 0)
+                    end
+                    
+                    -- Store state
+                    row.blessingID = blessingID
+                    
+                    -- Width Calculation (Padding: 5+24+4+24+4 + Text + 5 Padding = 66 + Text)
+                    local width = text:GetStringWidth() or 0
+                    local w = 66 + width
+                    if w > maxRowWidth then maxRowWidth = w end
+                    
+                else
+                    row:Hide()
+                end
+            else
+                row:Hide()
+            end
+        end
+    end
+    
+    -- Pass 2: Layout & Width Application
+    for _, row in ipairs(visibleRows) do
+        row:SetWidth(maxRowWidth - 10) -- Row is slightly narrower than container (padding)
+        
+        if lastRow then
+            row:SetPoint("TOPLEFT", lastRow, "BOTTOMLEFT", 0, 0)
+        else
+            -- First row: Move down to avoid title overlap (Title is at -4)
+            row:SetPoint("TOPLEFT", f, "TOPLEFT", 5, -20)
+        end
+        lastRow = row
+    end
+    
+    -- Resize Container
+    if math.abs(f:GetWidth() - maxRowWidth) > 1 then
+         f:SetWidth(maxRowWidth)
+    end
+    
+    local newHeight = 10
+    local numRows = table.getn(visibleRows)
+    if numRows > 0 then
+        -- 20px top padding + rows * 34px + 5px bottom padding
+        newHeight = 25 + (numRows * 34)
+    else
+        newHeight = 40
+    end
+    f:SetHeight(newHeight)
+end
 
 function Paladin:UpdateUI()
     self:UpdateBuffBar()

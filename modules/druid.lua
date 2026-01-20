@@ -34,6 +34,18 @@ Druid.SpecialIcons = {
 Druid.BUFF_MOTW = 0
 Druid.BUFF_THORNS = 1
 
+-- Buff durations in seconds (for timer calculations)
+-- Using Gift of the Wild duration (60 min) since that's what's typically cast in groups
+Druid.BuffDurations = {
+    MotW = 1800,      -- 30 minutes (Mark)
+    GotW = 3600,      -- 60 minutes (Gift)
+    Thorns = 600,     -- 10 minutes
+    Emerald = 1800,   -- 30 minutes (estimate)
+}
+-- Tooltip scanner for distinguishing Mark vs Gift
+local scanTooltip = CreateFrame("GameTooltip", "ClassPowerDruidScanTooltip", nil, "GameTooltipTemplate")
+scanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
+
 -----------------------------------------------------------------------------------
 -- State
 -----------------------------------------------------------------------------------
@@ -47,6 +59,9 @@ Druid.ThornsList = {}  -- New: list of players assigned for Thorns
 Druid.InnervateThreshold = {}  -- Mana % threshold for Innervate (0-100)
 Druid.RankInfo = {}
 
+-- Buff timing tracking (when we first saw a buff on someone)
+Druid.BuffTimestamps = {}  -- [playerName][buffType] = GetTime() when first seen
+
 -- Timers
 Druid.UpdateTimer = 0
 Druid.LastRequest = 0
@@ -57,6 +72,42 @@ Druid.UIDirty = false  -- Only update UI when data changed
 -- Context for dropdowns
 Druid.ContextName = nil
 Druid.AssignMode = "Innervate"
+
+-----------------------------------------------------------------------------------
+-- Gear Scanning
+-----------------------------------------------------------------------------------
+
+function Druid:ScanGear()
+    local cenarionCount = 0
+    local stormrageCount = 0
+    
+    for i = 1, 19 do -- Scan all slots
+        local link = GetInventoryItemLink("player", i)
+        if link then
+            local _, _, name = string.find(link, "%[(.+)%]")
+            if name then
+                if string.find(name, "Cenarion") then cenarionCount = cenarionCount + 1 end
+                if string.find(name, "Stormrage") then stormrageCount = stormrageCount + 1 end
+            end
+        end
+    end
+    
+    -- Default 10 min
+    local newDuration = 600 
+    
+    if stormrageCount >= 3 then
+        -- Turtle WoW: T2 3-set gives +100% duration (20 min)
+        newDuration = 1200
+    elseif cenarionCount >= 3 then
+        -- T1 3-set gives +50% duration (15 min)
+        newDuration = 900
+    end
+    
+    if self.BuffDurations.Thorns ~= newDuration then
+        self.BuffDurations.Thorns = newDuration
+        CP_Debug("Thorns duration updated to "..newDuration.."s (Cenarion: "..cenarionCount..", Stormrage: "..stormrageCount..")")
+    end
+end
 
 -----------------------------------------------------------------------------------
 -- Module Lifecycle
@@ -78,9 +129,21 @@ function Druid:OnLoad()
     -- Load saved group assignments and Innervate target
     self:LoadAssignments()
     
-    -- Initial spell scan
+    -- Initial scans
     self:ScanSpells()
+    self:ScanGear()
     self:ScanRaid()
+    
+    -- Create Event Frame for inventory changes
+    if not self.EventFrame then
+        self.EventFrame = CreateFrame("Frame")
+        self.EventFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
+        self.EventFrame:SetScript("OnEvent", function()
+            if event == "UNIT_INVENTORY_CHANGED" and arg1 == "player" then
+                Druid:ScanGear()
+            end
+        end)
+    end
     
     -- Create UI
     self:CreateBuffBar()
@@ -140,10 +203,17 @@ function Druid:OnUpdate(elapsed)
         end
     end
     
-    -- UI refresh (5s interval - buffs don't change that fast)
+    -- Determine refresh interval based on display mode
+    local displayMode = CP_PerUser.BuffDisplayMode or "missing"
+    local refreshInterval = 5.0  -- Default 5 seconds for "missing" mode
+    if displayMode == "always" or displayMode == "timer" then
+        refreshInterval = 1.0  -- 1 second for timer modes
+    end
+    
+    -- UI refresh
     self.UpdateTimer = self.UpdateTimer - elapsed
     if self.UpdateTimer <= 0 then
-        self.UpdateTimer = 5.0
+        self.UpdateTimer = refreshInterval
         
         -- Only scan and update if UI is visible
         local needsScan = false
@@ -332,6 +402,11 @@ function Druid:ScanRaid()
                 hasEmerald = false,
             }
             
+            -- Initialize timestamp tracking for this player
+            if not self.BuffTimestamps[name] then
+                self.BuffTimestamps[name] = {}
+            end
+            
             local b = 1
             while true do
                 local buffTexture = UnitBuff(unit, b)
@@ -342,20 +417,46 @@ function Druid:ScanRaid()
                 
                 -- Mark of the Wild & Gift of the Wild both use: Spell_Nature_Regeneration
                 if string.find(buffTexture, "regeneration") then 
-                    buffInfo.hasMotW = true 
+                    buffInfo.hasMotW = true
+                    
+                    -- Check Tooltip for "Gift of the Wild" vs "Mark of the Wild"
+                    scanTooltip:SetUnitBuff(unit, b)
+                    local tipText = ClassPowerDruidScanTooltipTextLeft1:GetText()
+                    local isGift = (tipText == "Gift of the Wild")
+                    
+                    if not self.BuffTimestamps[name] then self.BuffTimestamps[name] = {} end
+                    
+                    -- Update timestamp if new or type changed
+                    if not self.BuffTimestamps[name].MotW or self.BuffTimestamps[name].isGift ~= isGift then
+                        self.BuffTimestamps[name].MotW = GetTime()
+                        self.BuffTimestamps[name].isGift = isGift
+                    end
                 end
                 
                 -- Thorns: Spell_Nature_Thorns
                 if string.find(buffTexture, "thorns") then 
-                    buffInfo.hasThorns = true 
+                    buffInfo.hasThorns = true
+                    if not self.BuffTimestamps[name].Thorns then
+                        self.BuffTimestamps[name].Thorns = GetTime()
+                    end
                 end
                 
                 -- Emerald Blessing: Spell_Nature_ProtectionformNature
                 if string.find(buffTexture, "protectionformnature") then 
-                    buffInfo.hasEmerald = true 
+                    buffInfo.hasEmerald = true
+                    if not self.BuffTimestamps[name].Emerald then
+                        self.BuffTimestamps[name].Emerald = GetTime()
+                    end
                 end
                 
                 b = b + 1
+            end
+            
+            -- Clear timestamps for buffs that are no longer present (only if visible)
+            if UnitIsVisible(unit) then
+                if not buffInfo.hasMotW then self.BuffTimestamps[name].MotW = nil end
+                if not buffInfo.hasThorns then self.BuffTimestamps[name].Thorns = nil end
+                if not buffInfo.hasEmerald then self.BuffTimestamps[name].Emerald = nil end
             end
             
             if not self.CurrentBuffs[subgroup] then self.CurrentBuffs[subgroup] = {} end
@@ -516,6 +617,89 @@ function Druid:GetThornsMissing(druidName)
     end
     
     return missing, total
+end
+
+-- Estimate remaining time for a buff on a player (educated guess based on when we first saw it)
+function Druid:GetEstimatedTimeRemaining(playerName, buffType)
+    if not self.BuffTimestamps[playerName] then return nil end
+    if not self.BuffTimestamps[playerName][buffType] then return nil end
+    
+    local duration = self.BuffDurations[buffType] or 1800
+    
+    -- Adjust duration for Gift of the Wild (60m) vs Mark (30m)
+    if buffType == "MotW" and self.BuffTimestamps[playerName].isGift then
+        duration = self.BuffDurations.GotW
+    end
+    local firstSeen = self.BuffTimestamps[playerName][buffType]
+    local elapsed = GetTime() - firstSeen
+    local remaining = duration - elapsed
+    
+    if remaining < 0 then remaining = 0 end
+    return remaining
+end
+
+-- Get minimum time remaining for MotW across a group
+function Druid:GetGroupMinTimeRemaining(groupIndex)
+    local minTime = nil
+    
+    if not self.CurrentBuffs[groupIndex] then return nil end
+    
+    for _, m in pairs(self.CurrentBuffs[groupIndex]) do
+        if m.hasMotW and not m.dead then
+            local remaining = self:GetEstimatedTimeRemaining(m.name, "MotW")
+            if remaining then
+                if not minTime or remaining < minTime then
+                    minTime = remaining
+                end
+            end
+        end
+    end
+    
+    return minTime
+end
+
+-- Get minimum time remaining for Thorns across the Thorns list
+function Druid:GetThornsListMinTimeRemaining(druidName)
+    local minTime = nil
+    
+    if not self.ThornsList[druidName] then return nil end
+    
+    for _, targetName in ipairs(self.ThornsList[druidName]) do
+        local status = self.CurrentBuffsByName[targetName]
+        if status and status.hasThorns and not status.dead then
+            local remaining = self:GetEstimatedTimeRemaining(targetName, "Thorns")
+            if remaining then
+                if not minTime or remaining < minTime then
+                    minTime = remaining
+                end
+            end
+        end
+    end
+    
+    return minTime
+end
+
+-- Get Innervate cooldown remaining in seconds, or 0 if ready
+function Druid:GetInnervateCooldown()
+    -- Find Innervate spell slot
+    local i = 1
+    while true do
+        local spellName = GetSpellName(i, BOOKTYPE_SPELL)
+        if not spellName then break end
+        
+        if spellName == self.Spells.INNERVATE then
+            local start, duration = GetSpellCooldown(i, BOOKTYPE_SPELL)
+            if start and start > 0 and duration and duration > 0 then
+                local remaining = (start + duration) - GetTime()
+                if remaining > 0 then
+                    return remaining
+                end
+            end
+            return 0
+        end
+        i = i + 1
+    end
+    return 0
 end
 
 -----------------------------------------------------------------------------------
@@ -797,11 +981,54 @@ function Druid:UpdateBuffBar()
             local btnThorns = getglobal(row:GetName().."Thorns")
             local missing, total = self:GetThornsMissing(pname)
             
-            if total > 0 and missing > 0 then
+            local displayMode = CP_PerUser.BuffDisplayMode or "missing"
+            local minTimeRemaining = self:GetThornsListMinTimeRemaining(pname)
+            local thresholdSeconds = ((CP_PerUser.TimerThresholdMinutes or 5) * 60) + (CP_PerUser.TimerThresholdSeconds or 0)
+            
+            local shouldShow = false
+            if displayMode == "always" then
+                shouldShow = (total > 0)
+            elseif displayMode == "timer" then
+                if missing > 0 then
+                    shouldShow = true
+                elseif minTimeRemaining and minTimeRemaining <= thresholdSeconds then
+                    shouldShow = true
+                end
+            else -- "missing" mode
+                shouldShow = (total > 0 and missing > 0)
+            end
+            
+            if shouldShow then
                 btnThorns:Show()
                 btnThorns.tooltipText = "Thorns List"
-                getglobal(btnThorns:GetName().."Text"):SetText((total-missing).."/"..total)
-                getglobal(btnThorns:GetName().."Text"):SetTextColor(1,0,0)
+                local txt = getglobal(btnThorns:GetName().."Text")
+                local icon = getglobal(btnThorns:GetName().."Icon")
+                
+                -- Display format based on mode
+                if displayMode == "always" or displayMode == "timer" then
+                    -- Show timer + missing count
+                    if minTimeRemaining and minTimeRemaining > 0 and missing == 0 then
+                        -- All buffed, show time remaining
+                        txt:SetText(CP_FormatTime(minTimeRemaining))
+                        txt:SetTextColor(0, 1, 0)
+                    elseif missing > 0 then
+                        -- Some missing
+                        if minTimeRemaining and minTimeRemaining > 0 then
+                            txt:SetText(missing.." ("..CP_FormatTime(minTimeRemaining)..")")
+                        else
+                            txt:SetText(missing.." miss")
+                        end
+                        txt:SetTextColor(1, 0, 0)
+                    else
+                        txt:SetText(total.."/"..total)
+                        txt:SetTextColor(0, 1, 0)
+                    end
+                else
+                    -- Original missing mode display
+                    txt:SetText((total-missing).."/"..total)
+                    txt:SetTextColor(1, 0, 0)
+                end
+                
                 showRow = true
             else
                 btnThorns:Hide()
@@ -848,37 +1075,101 @@ function Druid:UpdateBuffBar()
                 local status = self.CurrentBuffsByName[target]
                 
                 if status and not status.dead and manaPercent <= threshold then
+                    -- Target needs Innervate - check if on cooldown
+                    local cooldownRemaining = self:GetInnervateCooldown()
+                    local icon = getglobal(btnInn:GetName().."Icon")
+                    local txt = getglobal(btnInn:GetName().."Text")
+                    
                     btnInn:Show()
-                    btnInn.tooltipText = "Innervate: "..target.." ("..manaPercent.."%)"
-                    getglobal(btnInn:GetName().."Text"):SetText(manaPercent.."%")
-                    getglobal(btnInn:GetName().."Text"):SetTextColor(1, 0.5, 0)
+                    
+                    if cooldownRemaining > 0 then
+                        -- On cooldown - show dimmed with CD timer
+                        btnInn.tooltipText = "Innervate: "..target.." ("..manaPercent.."%)\nCooldown: "..CP_FormatTime(cooldownRemaining)
+                        if icon then icon:SetVertexColor(0.5, 0.5, 0.5) end  -- 50% dimmed
+                        txt:SetText(CP_FormatTime(cooldownRemaining))
+                        txt:SetTextColor(0.7, 0.7, 0.7)  -- Gray text for CD
+                    else
+                        -- Ready to cast - show normal
+                        btnInn.tooltipText = "Innervate: "..target.." ("..manaPercent.."%)"
+                        if icon then icon:SetVertexColor(1, 1, 1) end  -- Full brightness
+                        txt:SetText(manaPercent.."%")
+                        txt:SetTextColor(1, 0.5, 0)  -- Orange when ready
+                    end
+                    
                     showRow = true
                 else
                     btnInn:Hide()
+                    -- Reset icon color when hidden
+                    local icon = getglobal(btnInn:GetName().."Icon")
+                    if icon then icon:SetVertexColor(1, 1, 1) end
                 end
             else
                 btnInn:Hide()
             end
         elseif assigns and assigns[i] and assigns[i] > 0 then
-            -- Group assigned - show MotW button if anyone is missing the buff
+            -- Group assigned - show based on display mode
             local btnMotW = getglobal(row:GetName().."MotW")
             if btnMotW then
                 local missing = 0
                 local total = 0
                 if self.CurrentBuffs[i] then
-                    for _, m in self.CurrentBuffs[i] do
+                    for _, m in pairs(self.CurrentBuffs[i]) do
                         total = total + 1
                         if not m.hasMotW and not m.dead then missing = missing + 1 end
                     end
                 end
-                if missing > 0 then
+                
+                local displayMode = CP_PerUser.BuffDisplayMode or "missing"
+                local minTimeRemaining = self:GetGroupMinTimeRemaining(i)
+                local thresholdSeconds = ((CP_PerUser.TimerThresholdMinutes or 5) * 60) + (CP_PerUser.TimerThresholdSeconds or 0)
+                
+                local shouldShow = false
+                if displayMode == "always" then
+                    -- Always show assigned groups
+                    shouldShow = (total > 0)
+                elseif displayMode == "timer" then
+                    -- Show if missing OR if time remaining is below threshold
+                    if missing > 0 then
+                        shouldShow = true
+                    elseif minTimeRemaining and minTimeRemaining <= thresholdSeconds then
+                        shouldShow = true
+                    end
+                else -- "missing" mode (default)
+                    shouldShow = (missing > 0)
+                end
+                
+                if shouldShow then
                     btnMotW:Show()
                     btnMotW.tooltipText = "Group "..i..": Mark of the Wild\nLeft-click: Gift (group)\nRight-click: Mark (single)"
                     local txt = getglobal(btnMotW:GetName().."Text")
                     local icon = getglobal(btnMotW:GetName().."Icon")
-                    txt:SetText((total-missing).."/"..total)
-                    txt:SetTextColor(1,0,0)
                     icon:SetTexture(self.BuffIcons[0])
+                    
+                    -- Display format based on mode
+                    if displayMode == "always" or displayMode == "timer" then
+                        -- Show timer + missing count
+                        if minTimeRemaining and minTimeRemaining > 0 and missing == 0 then
+                            -- All buffed, show time remaining
+                            txt:SetText(CP_FormatTime(minTimeRemaining))
+                            txt:SetTextColor(0, 1, 0)  -- Green when all buffed
+                        elseif missing > 0 then
+                            -- Some missing
+                            if minTimeRemaining and minTimeRemaining > 0 then
+                                txt:SetText(missing.." ("..CP_FormatTime(minTimeRemaining)..")")
+                            else
+                                txt:SetText(missing.." miss")
+                            end
+                            txt:SetTextColor(1, 0, 0)  -- Red when missing
+                        else
+                            txt:SetText(total.."/"..total)
+                            txt:SetTextColor(0, 1, 0)
+                        end
+                    else
+                        -- Original missing mode display
+                        txt:SetText((total-missing).."/"..total)
+                        txt:SetTextColor(1, 0, 0)
+                    end
+                    
                     showRow = true
                 else
                     btnMotW:Hide()
@@ -901,9 +1192,64 @@ function Druid:UpdateBuffBar()
         end
     end
     
+    -- Dynamic height (only update if changed)
     local newHeight = 25 + (count * 34)
     if newHeight < 40 then newHeight = 40 end
-    f:SetHeight(newHeight)
+    if f:GetHeight() ~= newHeight then
+        f:SetHeight(newHeight)
+    end
+    
+    -- Dynamic width based on actual text content
+    -- Calculate: label(40) + button(30) + padding(4) + text width + right margin(10)
+    local maxTextWidth = 0
+    for i = 1, 11 do
+        local row = getglobal("ClassPowerDruidHUDRow"..i)
+        if row and row:IsVisible() then
+            -- Check MotW button text
+            local btnMotW = getglobal(row:GetName().."MotW")
+            if btnMotW and btnMotW:IsVisible() then
+                local txt = getglobal(btnMotW:GetName().."Text")
+                if txt then
+                    local textWidth = txt:GetStringWidth() or 0
+                    if textWidth > maxTextWidth then maxTextWidth = textWidth end
+                end
+            end
+            -- Check Thorns button text
+            local btnThorns = getglobal(row:GetName().."Thorns")
+            if btnThorns and btnThorns:IsVisible() then
+                local txt = getglobal(btnThorns:GetName().."Text")
+                if txt then
+                    local textWidth = txt:GetStringWidth() or 0
+                    if textWidth > maxTextWidth then maxTextWidth = textWidth end
+                end
+            end
+            -- Check Emerald button text
+            local btnEmerald = getglobal(row:GetName().."Emerald")
+            if btnEmerald and btnEmerald:IsVisible() then
+                local txt = getglobal(btnEmerald:GetName().."Text")
+                if txt then
+                    local textWidth = txt:GetStringWidth() or 0
+                    if textWidth > maxTextWidth then maxTextWidth = textWidth end
+                end
+            end
+            -- Check Innervate button text
+            local btnInn = getglobal(row:GetName().."Innervate")
+            if btnInn and btnInn:IsVisible() then
+                local txt = getglobal(btnInn:GetName().."Text")
+                if txt then
+                    local textWidth = txt:GetStringWidth() or 0
+                    if textWidth > maxTextWidth then maxTextWidth = textWidth end
+                end
+            end
+        end
+    end
+    
+    -- Width = left padding(5) + label width(35) + button(30) + gap(4) + text + right padding(10)
+    local newWidth = 5 + 35 + 30 + 4 + maxTextWidth + 10
+    if newWidth < 80 then newWidth = 80 end  -- Minimum width
+    if count > 0 and f:GetWidth() ~= newWidth then
+        f:SetWidth(newWidth)
+    end
 end
 
 -----------------------------------------------------------------------------------
@@ -1012,6 +1358,26 @@ function Druid:CreateConfigWindow()
     else
         f:SetScale(1.0)
     end
+    
+    -- Settings button at bottom-left
+    local settingsBtn = CreateFrame("Button", f:GetName().."SettingsBtn", f, "UIPanelButtonTemplate")
+    settingsBtn:SetWidth(80)
+    settingsBtn:SetHeight(22)
+    settingsBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 15)
+    settingsBtn:SetText("Settings...")
+    settingsBtn:SetScript("OnClick", function()
+        CP_ShowSettingsPanel()
+    end)
+    settingsBtn:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Display Settings")
+        GameTooltip:AddLine("Configure buff bar display mode", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("and timer thresholds.", 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    settingsBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
     
     f:Hide()
     self.ConfigWindow = f
@@ -1212,8 +1578,9 @@ function Druid:UpdateConfigGrid()
         if row then row:Hide() end
     end
     
-    local newHeight = 80 + (rowIndex - 1) * 46
-    if newHeight < 140 then newHeight = 140 end
+    -- Add extra height for settings button at bottom
+    local newHeight = 80 + (rowIndex - 1) * 46 + 40  -- +40 for settings button
+    if newHeight < 180 then newHeight = 180 end  -- Minimum to fit settings button
     self.ConfigWindow:SetHeight(newHeight)
 end
 
@@ -1403,27 +1770,72 @@ function Druid:BuffButton_OnClick(btn)
     local pname = UnitName("player")
     
     if i == 9 then
-        -- Thorns - cast on first person in list missing it
+        -- Thorns
         local thornsList = self.ThornsList[pname]
         if thornsList then
+            local isRightClick = (arg1 == "RightButton")
+            local bestTarget = nil
+            local minTime = 999999
+
             for _, target in ipairs(thornsList) do
                 local status = self.CurrentBuffsByName[target]
-                if status and not status.hasThorns and not status.dead and status.visible then
-                    ClearTarget()
-                    TargetByName(target, true)
-                    if UnitName("target") == target then
-                        if CheckInteractDistance("target", 4) then
-                            CastSpellByName(self.Spells.THORNS)
-                            TargetLastTarget()
-                            self:ScanRaid()
-                            self:UpdateBuffBar()
-                            return
+                if status and status.visible and not status.dead then
+                    -- Check status
+                    local missing = not status.hasThorns
+                    
+                    if isRightClick then
+                        -- Right-click: Only target missing
+                        if missing then
+                            bestTarget = target
+                            break -- Found one, that's enough
+                        end
+                    else
+                        -- Left-click: Force refresh (smart priority)
+                        -- Prioritize missing (-1), then lowest duration
+                        local remaining = self:GetEstimatedTimeRemaining(target, "Thorns")
+                        if missing then remaining = -1 end
+                        if not remaining then remaining = 0 end -- Should have timestamp if hasThorns, but safety fallback
+                        
+                        if remaining < minTime then
+                            minTime = remaining
+                            bestTarget = target
                         end
                     end
-                    TargetLastTarget()
                 end
             end
-            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No Thorns targets in range!")
+            
+            if bestTarget then
+                ClearTarget()
+                TargetByName(bestTarget, true)
+                if UnitName("target") == bestTarget then
+                    if CheckInteractDistance("target", 4) then
+                        CastSpellByName(self.Spells.THORNS)
+                        
+                        -- Optimistic timestamp update for forced refresh
+                        if self.BuffTimestamps[bestTarget] then
+                            self.BuffTimestamps[bestTarget].Thorns = GetTime()
+                        end
+
+                        TargetLastTarget()
+                        self:ScanRaid()
+                        self:UpdateBuffBar()
+                        return
+                    else
+                        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: " .. bestTarget .. " is out of range!")
+                    end
+                else
+                    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Could not target " .. bestTarget)
+                end
+                TargetLastTarget()
+            else
+                if isRightClick then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: All Thorns targets are buffed!")
+                else
+                    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No Thorns targets need refresh!")
+                end
+            end
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: No Thorns targets assigned!")
         end
     elseif i == 10 then
         -- Emerald Blessing - just cast it (self-cast raid buff)
@@ -1496,6 +1908,16 @@ function Druid:BuffButton_OnClick(btn)
                             CP_Debug("Casting "..spellName.." on "..member.name)
                             CastSpellByName(spellName)
                             TargetLastTarget()
+                            
+                            -- Reset timestamps for group when casting Gift of the Wild
+                            if spellName == self.Spells.GOTW and self.CurrentBuffs[gid] then
+                                for _, m in pairs(self.CurrentBuffs[gid]) do
+                                    if self.BuffTimestamps[m.name] then
+                                        self.BuffTimestamps[m.name].MotW = GetTime()
+                                    end
+                                end
+                            end
+                            
                             self:ScanRaid()
                             self:UpdateBuffBar()
                             return
