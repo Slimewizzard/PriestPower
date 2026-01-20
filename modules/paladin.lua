@@ -213,7 +213,7 @@ Paladin.ContextClass = nil
 -----------------------------------------------------------------------------------
 
 function Paladin:OnLoad()
-    CP_Debug("Paladin:OnLoad()")
+    ClassPower_Debug("Paladin:OnLoad()")
     
     -- Load saved assignments before anything else
     self:LoadAssignments()
@@ -343,7 +343,7 @@ function Paladin:OnUpdate(elapsed)
     -- UI refresh (1s interval if timers shown, else 5s)
     self.UpdateTimer = self.UpdateTimer - elapsed
     if self.UpdateTimer <= 0 then
-        local displayMode = CP_PerUser.BuffDisplayMode
+        local displayMode = ClassPower_PerUser.BuffDisplayMode
         if displayMode == "always" or displayMode == "timer" then
             self.UpdateTimer = 1.0
         else
@@ -486,10 +486,10 @@ function Paladin:ScanSpells()
     self.RankInfo = info
     
     -- Debug: Show what blessings were found
-    CP_Debug("Paladin:ScanSpells() found:")
+    ClassPower_Debug("Paladin:ScanSpells() found:")
     for id = 0, 5 do
         if info[id] then
-            CP_Debug("  Blessing "..id.." ("..self.Blessings[id].short.."): rank "..info[id].rank..", greater="..(info[id].hasGreater and "yes" or "no"))
+            ClassPower_Debug("  Blessing "..id.." ("..self.Blessings[id].short.."): rank "..info[id].rank..", greater="..(info[id].hasGreater and "yes" or "no"))
         end
     end
     
@@ -1268,7 +1268,7 @@ function Paladin:CreateBuffBar()
         end
     end)
     
-    local grip = CP_CreateResizeGrip(f, f:GetName().."ResizeGrip")
+    local grip = ClassPower_CreateResizeGrip(f, f:GetName().."ResizeGrip")
     grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, 2)
     grip:SetScript("OnMouseUp", function()
         local p = this:GetParent()
@@ -1282,16 +1282,16 @@ function Paladin:CreateBuffBar()
         row:Hide()
     end
     
-    if CP_PerUser.PaladinPoint then
+    if ClassPower_PerUser.PaladinPoint then
         f:ClearAllPoints()
-        f:SetPoint(CP_PerUser.PaladinPoint, "UIParent", CP_PerUser.PaladinRelativePoint or "CENTER", 
-                   CP_PerUser.PaladinX or 0, CP_PerUser.PaladinY or 0)
+        f:SetPoint(ClassPower_PerUser.PaladinPoint, "UIParent", ClassPower_PerUser.PaladinRelativePoint or "CENTER", 
+                   ClassPower_PerUser.PaladinX or 0, ClassPower_PerUser.PaladinY or 0)
     else
         f:SetPoint("CENTER", 0, 0)
     end
     
-    if CP_PerUser.PaladinScale then
-        f:SetScale(CP_PerUser.PaladinScale)
+    if ClassPower_PerUser.PaladinScale then
+        f:SetScale(ClassPower_PerUser.PaladinScale)
     else
         f:SetScale(0.7)
     end
@@ -1336,16 +1336,16 @@ end
 function Paladin:SaveBuffBarPosition()
     if not self.BuffBar then return end
     local point, _, relativePoint, x, y = self.BuffBar:GetPoint()
-    CP_PerUser.PaladinPoint = point
-    CP_PerUser.PaladinRelativePoint = relativePoint
-    CP_PerUser.PaladinX = x
-    CP_PerUser.PaladinY = y
-    CP_PerUser.PaladinScale = self.BuffBar:GetScale()
+    ClassPower_PerUser.PaladinPoint = point
+    ClassPower_PerUser.PaladinRelativePoint = relativePoint
+    ClassPower_PerUser.PaladinX = x
+    ClassPower_PerUser.PaladinY = y
+    ClassPower_PerUser.PaladinScale = self.BuffBar:GetScale()
 end
 
 function Paladin:SaveConfigPosition()
     if not self.ConfigWindow then return end
-    CP_PerUser.PaladinConfigScale = self.ConfigWindow:GetScale()
+    ClassPower_PerUser.PaladinConfigScale = self.ConfigWindow:GetScale()
 end
 
 function Paladin:UpdateBuffBar()
@@ -1551,7 +1551,7 @@ function Paladin:CreateConfigWindow()
     f:SetScript("OnMouseUp", function() this:StopMovingOrSizing() end)
     
     -- Add resize grip for scaling
-    local grip = CP_CreateResizeGrip(f, f:GetName().."ResizeGrip")
+    local grip = ClassPower_CreateResizeGrip(f, f:GetName().."ResizeGrip")
     grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -10, 10)
     grip:SetScript("OnMouseUp", function()
         local p = this:GetParent()
@@ -1607,8 +1607,8 @@ function Paladin:CreateConfigWindow()
     end
     
     -- Apply saved scale
-    if CP_PerUser.PaladinConfigScale then
-        f:SetScale(CP_PerUser.PaladinConfigScale)
+    if ClassPower_PerUser.PaladinConfigScale then
+        f:SetScale(ClassPower_PerUser.PaladinConfigScale)
     else
         f:SetScale(1.0)
     end
@@ -1620,7 +1620,7 @@ function Paladin:CreateConfigWindow()
     btnSettings:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 15)
     btnSettings:SetText("Settings...")
     btnSettings:SetScript("OnClick", function()
-        CP_ShowSettingsPanel()
+        ClassPower_ShowSettingsPanel()
     end)
     
     -- Auto-Assign button (only visible for leaders/assists)
@@ -1693,7 +1693,7 @@ function Paladin:CreateConfigRow(parent, rowIndex)
     row:SetHeight(60)  -- Height for name + capability icons + class buttons
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 15, -65 - (rowIndex-1)*62)
     
-    local clearBtn = CP_CreateClearButton(row, rowName.."Clear")
+    local clearBtn = ClassPower_CreateClearButton(row, rowName.."Clear")
     clearBtn:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -4)
     clearBtn:SetScript("OnClick", function() Paladin:ClearButton_OnClick(this) end)
     
@@ -2261,8 +2261,8 @@ function Paladin:UpdateBuffBar()
     local pname = UnitName("player")
     local assigns = self.Assignments[pname] or {}
     
-    local displayMode = CP_PerUser.BuffDisplayMode or "missing"
-    local thresholdSeconds = ((CP_PerUser.TimerThresholdMinutes or 5) * 60) + (CP_PerUser.TimerThresholdSeconds or 0)
+    local displayMode = ClassPower_PerUser.BuffDisplayMode or "missing"
+    local thresholdSeconds = ((ClassPower_PerUser.TimerThresholdMinutes or 5) * 60) + (ClassPower_PerUser.TimerThresholdSeconds or 0)
     
     local maxRowWidth = 120 -- Start smaller to allow shrinking, but keep minimum
     local lastRow = nil
@@ -2319,11 +2319,11 @@ function Paladin:UpdateBuffBar()
                     -- Update Text
                     if displayMode == "always" or displayMode == "timer" then
                          if minTime and minTime > 0 and missing == 0 then
-                              text:SetText(CP_FormatTime(minTime))
+                              text:SetText(ClassPower_FormatTime(minTime))
                               text:SetTextColor(0, 1, 0)
                          elseif missing > 0 then
                               if minTime and minTime > 0 then
-                                   text:SetText(missing.." ("..CP_FormatTime(minTime)..")")
+                                   text:SetText(missing.." ("..ClassPower_FormatTime(minTime)..")")
                               else
                                    text:SetText(missing.."/"..total)
                               end
@@ -2403,12 +2403,12 @@ function Paladin:UpdateLeaderButtons()
 end
 
 function Paladin:ResetUI()
-    CP_PerUser.PaladinPoint = nil
-    CP_PerUser.PaladinRelativePoint = nil
-    CP_PerUser.PaladinX = nil
-    CP_PerUser.PaladinY = nil
-    CP_PerUser.PaladinScale = 0.7
-    CP_PerUser.PaladinConfigScale = 1.0
+    ClassPower_PerUser.PaladinPoint = nil
+    ClassPower_PerUser.PaladinRelativePoint = nil
+    ClassPower_PerUser.PaladinX = nil
+    ClassPower_PerUser.PaladinY = nil
+    ClassPower_PerUser.PaladinScale = 0.7
+    ClassPower_PerUser.PaladinConfigScale = 1.0
     
     if self.BuffBar then
         self.BuffBar:ClearAllPoints()
@@ -2463,16 +2463,16 @@ function Paladin:SaveAssignments()
     if not pname then return end
     
     -- Initialize saved variable if needed
-    if not CP_PaladinAssignments then
-        CP_PaladinAssignments = {}
+    if not ClassPower_PaladinAssignments then
+        ClassPower_PaladinAssignments = {}
     end
     
     -- Save current player's assignments
-    CP_PaladinAssignments.Assignments = self.Assignments[pname] or {}
-    CP_PaladinAssignments.AuraAssignment = self.AuraAssignments[pname]
-    CP_PaladinAssignments.JudgementAssignment = self.JudgementAssignments[pname]
+    ClassPower_PaladinAssignments.Assignments = self.Assignments[pname] or {}
+    ClassPower_PaladinAssignments.AuraAssignment = self.AuraAssignments[pname]
+    ClassPower_PaladinAssignments.JudgementAssignment = self.JudgementAssignments[pname]
     
-    CP_Debug("Paladin: Saved assignments for "..pname)
+    ClassPower_Debug("Paladin: Saved assignments for "..pname)
 end
 
 function Paladin:LoadAssignments()
@@ -2480,33 +2480,33 @@ function Paladin:LoadAssignments()
     if not pname then return end
     
     -- Check if we have saved data
-    if not CP_PaladinAssignments then
-        CP_Debug("Paladin: No saved assignments found")
+    if not ClassPower_PaladinAssignments then
+        ClassPower_Debug("Paladin: No saved assignments found")
         return
     end
     
     -- Load assignments for current player
-    if CP_PaladinAssignments.Assignments then
+    if ClassPower_PaladinAssignments.Assignments then
         self.Assignments[pname] = {}
         for classID = 0, 9 do
-            local bid = CP_PaladinAssignments.Assignments[classID]
+            local bid = ClassPower_PaladinAssignments.Assignments[classID]
             if bid ~= nil then
                 self.Assignments[pname][classID] = bid
             else
                 self.Assignments[pname][classID] = -1
             end
         end
-        CP_Debug("Paladin: Loaded blessing assignments")
+        ClassPower_Debug("Paladin: Loaded blessing assignments")
     end
     
-    if CP_PaladinAssignments.AuraAssignment ~= nil then
-        self.AuraAssignments[pname] = CP_PaladinAssignments.AuraAssignment
-        CP_Debug("Paladin: Loaded aura assignment: "..tostring(CP_PaladinAssignments.AuraAssignment))
+    if ClassPower_PaladinAssignments.AuraAssignment ~= nil then
+        self.AuraAssignments[pname] = ClassPower_PaladinAssignments.AuraAssignment
+        ClassPower_Debug("Paladin: Loaded aura assignment: "..tostring(ClassPower_PaladinAssignments.AuraAssignment))
     end
     
-    if CP_PaladinAssignments.JudgementAssignment ~= nil then
-        self.JudgementAssignments[pname] = CP_PaladinAssignments.JudgementAssignment
-        CP_Debug("Paladin: Loaded judgement assignment: "..tostring(CP_PaladinAssignments.JudgementAssignment))
+    if ClassPower_PaladinAssignments.JudgementAssignment ~= nil then
+        self.JudgementAssignments[pname] = ClassPower_PaladinAssignments.JudgementAssignment
+        ClassPower_Debug("Paladin: Loaded judgement assignment: "..tostring(ClassPower_PaladinAssignments.JudgementAssignment))
     end
 end
 
