@@ -83,6 +83,8 @@ The **Admin Window** allows **Raid Leaders** and **Raid Assistants** to view and
 4. **Make Changes**: Modify assignments as needed (requires Leader/Assist)
 5. **Auto-Sync**: Changes broadcast automatically to all ClassPower users
 
+> **Note**: If you open a class module, use the "close module" button to unload the class module when you are done assigning. 
+
 > **Note**: Non-leaders can only view their own class's assignments. Raid Leaders/Assistants can view and edit ALL class modules.
 
 ### Tank Manager
