@@ -1185,6 +1185,12 @@ function Paladin:CycleBlessingForward(paladinName, classID)
     
     self.Assignments[paladinName][classID] = cur
     ClassPower_SendMessage("PASSIGN "..paladinName.." "..classID.." "..cur)
+    
+    if ClassPower_PerUser.PallyPowerCompat then
+        local msgType = (GetNumRaidMembers() > 0) and "RAID" or "PARTY"
+        SendAddonMessage("PLPWR", "ASSIGN "..paladinName.." "..classID.." "..cur, msgType)
+    end
+    
     self:UpdateUI()
     
     -- Save if this is for the current player
@@ -1221,6 +1227,11 @@ function Paladin:CycleBlessingForwardAllClasses(paladinName, referenceClassID)
     for classID = 0, 9 do
         self.Assignments[paladinName][classID] = newBlessing
         ClassPower_SendMessage("PASSIGN "..paladinName.." "..classID.." "..newBlessing)
+    end
+    
+    if ClassPower_PerUser.PallyPowerCompat then
+        local msgType = (GetNumRaidMembers() > 0) and "RAID" or "PARTY"
+        SendAddonMessage("PLPWR", "MASSIGN "..paladinName.." "..newBlessing, msgType)
     end
     
     if newBlessing >= 0 then
@@ -1644,6 +1655,34 @@ function Paladin:CreateConfigWindow()
         ClassPower_ShowSettingsPanel()
     end)
     
+    -- PallyPower Compatibility Checkbox
+    local chkPP = CreateFrame("CheckButton", "CPPaladinPPCompat", f, "UICheckButtonTemplate")
+    chkPP:SetWidth(24); chkPP:SetHeight(24)
+    chkPP:SetPoint("LEFT", btnSettings, "RIGHT", 15, 0)
+    local chkLabel = chkPP:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    chkLabel:SetPoint("LEFT", chkPP, "RIGHT", 2, 1)
+    chkLabel:SetText("Link PallyPower")
+    
+    chkPP:SetScript("OnShow", function()
+        this:SetChecked(ClassPower_PerUser.PallyPowerCompat)
+    end)
+    chkPP:SetScript("OnClick", function()
+        if this:GetChecked() then
+            ClassPower_PerUser.PallyPowerCompat = true
+            Paladin:RequestPallyPowerSync()
+        else
+            ClassPower_PerUser.PallyPowerCompat = false
+        end
+    end)
+    chkPP:SetScript("OnEnter", function()
+         GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+         GameTooltip:SetText("PallyPower Compatibility")
+         GameTooltip:AddLine("Enables two-way communication with PallyPower.", 0.7, 0.7, 0.7)
+         GameTooltip:AddLine("Useful if other paladins are using PallyPower.", 0.7, 0.7, 0.7)
+         GameTooltip:Show()
+    end)
+    chkPP:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    
     -- Auto-Assign button (only visible for leaders/assists)
     local autoBtn = CreateFrame("Button", f:GetName().."AutoAssignBtn", f, "UIPanelButtonTemplate")
     autoBtn:SetWidth(90)
@@ -2029,6 +2068,10 @@ function Paladin:ClearButton_OnClick(btn)
     self.JudgementAssignments[paladinName] = nil
     
     ClassPower_SendMessage("PCLEAR "..paladinName)
+    if ClassPower_PerUser.PallyPowerCompat then
+        local msgType = (GetNumRaidMembers() > 0) and "RAID" or "PARTY"
+        SendAddonMessage("PLPWR", "MASSIGN "..paladinName.." -1", msgType)
+    end
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ClassPower|r: Cleared all assignments for "..paladinName)
     
     self:UpdateConfigGrid()
@@ -2055,6 +2098,10 @@ function Paladin:ClassButton_OnClick(btn)
         self.Assignments[paladinName] = self.Assignments[paladinName] or {}
         self.Assignments[paladinName][classID] = -1
         ClassPower_SendMessage("PASSIGN "..paladinName.." "..classID.." -1")
+        if ClassPower_PerUser.PallyPowerCompat then
+            local msgType = (GetNumRaidMembers() > 0) and "RAID" or "PARTY"
+            SendAddonMessage("PLPWR", "ASSIGN "..paladinName.." "..classID.." -1", msgType)
+        end
         self:UpdateUI()
     elseif IsShiftKeyDown() then
         self:CycleBlessingForwardAllClasses(paladinName, classID)
@@ -2531,6 +2578,175 @@ function Paladin:LoadAssignments()
     end
 end
 
+-----------------------------------------------------------------------------------
+-- PallyPower Compatibility
+-----------------------------------------------------------------------------------
+
+function Paladin:RequestPallyPowerSync()
+    if not ClassPower_PerUser.PallyPowerCompat then return end
+    if GetNumRaidMembers() > 0 then
+        SendAddonMessage("PLPWR", "REQ", "RAID")
+    elseif GetNumPartyMembers() > 0 then
+        SendAddonMessage("PLPWR", "REQ", "PARTY")
+    end
+end
+
+function Paladin:SendPallyPowerSelf()
+    if not ClassPower_PerUser.PallyPowerCompat then return end
+    
+    local pname = UnitName("player")
+    local msg = "SELF "
+    
+    -- Part 1: Ranks (2 chars per blessing 0-5: Rank + Talent)
+    local rInfo = self.RankInfo or {}
+    for id = 0, 5 do
+        if rInfo[id] then
+            msg = msg .. rInfo[id].rank .. rInfo[id].talent
+        else
+            msg = msg .. "nn"
+        end
+    end
+    
+    msg = msg .. "@"
+    
+    -- Part 2: Assignments (1 char per class 0-9)
+    local assigns = self.Assignments[pname] or {}
+    for classID = 0, 9 do
+        local bid = assigns[classID]
+        if bid and bid >= 0 then
+            msg = msg .. bid
+        else
+            msg = msg .. "n"
+        end
+    end
+    
+    -- Send SELF
+    if GetNumRaidMembers() > 0 then
+        SendAddonMessage("PLPWR", msg, "RAID")
+        SendAddonMessage("PLPWR", "SYMCOUNT "..self.SymbolCount, "RAID")
+    elseif GetNumPartyMembers() > 0 then
+        SendAddonMessage("PLPWR", msg, "PARTY")
+        SendAddonMessage("PLPWR", "SYMCOUNT "..self.SymbolCount, "PARTY")
+    end
+end
+
+function Paladin:OnPallyPowerMessage(sender, msg, channel)
+    if not ClassPower_PerUser.PallyPowerCompat then return end
+    if sender == UnitName("player") then return end -- Ignore self
+    
+    -- REQ: Reply with SELF
+    if msg == "REQ" then
+        self:SendPallyPowerSelf()
+        return
+    end
+    
+    -- SELF: Update roster info for that sender
+    if string.find(msg, "^SELF") then
+        local _, _, nums, assignStr = string.find(msg, "SELF ([0-9n]*)@?([0-9n]*)")
+        if nums then
+            -- Parse ranks/talents
+            local info = {}
+            for id = 0, 5 do
+                local rank = string.sub(nums, id*2+1, id*2+1)
+                local talent = string.sub(nums, id*2+2, id*2+2)
+                
+                if rank ~= "n" then
+                    info[id] = {
+                        rank = tonumber(rank) or 0,
+                        talent = tonumber(talent) or 0
+                    }
+                end
+            end
+            self.AllPaladins[sender] = info -- Merge/Overwrite
+            
+            -- Parse Assignments if present
+            if assignStr and assignStr ~= "" then
+                self.Assignments[sender] = self.Assignments[sender] or {}
+                for id = 0, 9 do
+                     local char = string.sub(assignStr, id+1, id+1)
+                     if char == "n" or char == "" then
+                         self.Assignments[sender][id] = -1
+                     else
+                         self.Assignments[sender][id] = tonumber(char) or -1
+                     end
+                end
+            end
+            
+            self:UpdateUI()
+        end
+        return
+    end
+    
+    -- ASSIGN: Update specific assignment
+    -- Format: ASSIGN <name> <class> <skill>
+    if string.find(msg, "^ASSIGN") then
+        local _, _, name, classID, skillID = string.find(msg, "^ASSIGN (.*) (.*) (.*)")
+        if name and classID and skillID then
+            name = name
+            classID = tonumber(classID)
+            skillID = tonumber(skillID)
+            
+            -- Only accept if from leader/promoted OR if self-assigned (though sender != self here)
+            -- Matches PallyPower logic: anyone can assign themselves? No, usually leader control.
+            -- Using ClassPower_IsPromoted helper or just accepting it to keep sync.
+            -- PallyPower checks PallyPower_CheckRaidLeader(sender) OR (name == sender).
+            
+            if ClassPower_IsPromoted(sender) or name == sender then
+                self.Assignments[name] = self.Assignments[name] or {}
+                self.Assignments[name][classID] = skillID
+                ClassPower_Debug("PP Sync: "..name.." assigned skill "..skillID.." for class "..classID)
+                self:UpdateUI()
+            end
+        end
+        return
+    end
+    
+    -- MASSIGN: Mass assign for one paladin
+    -- Format: MASSIGN <name> <skill>
+    if string.find(msg, "^MASSIGN") then
+         local _, _, name, skillID = string.find(msg, "^MASSIGN (.*) (.*)")
+         if name and skillID then
+             skillID = tonumber(skillID)
+             if ClassPower_IsPromoted(sender) or name == sender then
+                 self.Assignments[name] = self.Assignments[name] or {}
+                 for c = 0, 9 do
+                     self.Assignments[name][c] = skillID
+                 end
+                 self:UpdateUI()
+             end
+         end
+         return
+    end
+    
+    -- SYMCOUNT
+    if string.find(msg, "^SYMCOUNT") then
+        -- We don't track other people's symbol counts currently in ClassPower UI, but typically PP stores it.
+        -- We can ignore it for now or store it if we add a column later.
+        return
+    end
+    
+    -- CLEAR
+    if string.find(msg, "^CLEAR") then
+        local _, _, who = string.find(msg, "^CLEAR (.*)") -- Wait, PP implementation of CLEAR might be just "CLEAR" or "CLEAR"
+        -- PP code: PallyPower_SendMessage("CLEAR")
+        -- PP Parse: if string.find(msg, "^CLEAR") then PallyPower_Clear(true, sender)
+        
+        if ClassPower_IsPromoted(sender) then
+            -- Clear all assignments? Or just sender's?
+            -- PallyPower CLEAR usually implies resetting the roster assignments.
+            -- Since this is destructive, be careful.
+            -- "PallyPower_Clear(true, sender)" in PP clears EVERYONE if sender is leader.
+            -- Let's replicate that behavior.
+            
+             for n, _ in pairs(self.Assignments) do
+                 self.Assignments[n] = {}
+                 for i=0,9 do self.Assignments[n][i] = -1 end
+             end
+             self:UpdateUI()
+             ClassPower_Debug("PP Sync: Config cleared by "..sender)
+        end
+    end
+end
 -----------------------------------------------------------------------------------
 -- Register Module
 -----------------------------------------------------------------------------------

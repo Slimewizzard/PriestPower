@@ -375,6 +375,12 @@ function ClassPower_OnEvent(event)
                     end
                 end
             end
+            
+        elseif arg1 == "PLPWR" then
+            -- PallyPower message: Route to active module if it handles it
+             if ClassPower.activeModule and ClassPower.activeModule.OnPallyPowerMessage then
+                ClassPower.activeModule:OnPallyPowerMessage(arg4, arg2, arg3) -- sender, msg, channel
+            end
         end
     elseif event == "UNIT_AURA" or event == "UNIT_MANA" or event == "UNIT_MAXMANA" then
         -- Mark specific module as dirty for specific unit
@@ -450,6 +456,12 @@ eventFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_BUFF")
 eventFrame:RegisterEvent("UNIT_AURA")
 eventFrame:RegisterEvent("UNIT_MANA")
 eventFrame:RegisterEvent("UNIT_MAXMANA")
+
+-- Register prefix for ClassPower and PallyPower
+if RegisterAddonMessagePrefix then
+    RegisterAddonMessagePrefix(ClassPower_PREFIX)
+    RegisterAddonMessagePrefix("PLPWR") -- For PallyPower compatibility
+end
 
 eventFrame:SetScript("OnEvent", function() ClassPower_OnEvent(event) end)
 eventFrame:SetScript("OnUpdate", function() ClassPower_OnUpdate(arg1) end)
